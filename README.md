@@ -1,104 +1,96 @@
 # ferrywire
 
-**English** | [Русский](README.ru.md)
+Network-stack research tool: a TCP tunnel with pluggable transports.
 
-Network stack research tool. TCP tunnel with pluggable transports.
+```
+Client (SOCKS5) --> Transport --> Exit node --> Internet
+```
 
-## Overview
-```
-Client (SOCKS5) --> Transport --> Exit Node --> Internet
-```
+The client runs a SOCKS5 proxy and tunnels TCP through a transport. The exit
+node decapsulates packets and forwards them to their destination via a raw
+socket.
+
+## Transports
+
+- `yandex` - carries packets inside Yandex Docs editor cursor messages.
+- `oneme` - carries packets over a MAX messenger WebRTC data channel.
 
 ## Requirements
-1. Golang v. 1.26.3+ - is required for building desktop client / exit node binary (ferrywire);
-2. Android Native Development Kit (NDK) v.27.0.12077973+ - is required for building Android client binary;
-3. XCode v. 26.6+ - is required for building iOS client binary;
-4. Linux VPS / VDS exit node.
 
-## Overview
+- Go 1.26.4+ for the desktop client / exit-node binary.
+- Android NDK r27+ for the Android client build.
+- Xcode 26+ for the iOS client build.
+- A Linux VPS with root for the exit node.
 
-TCP packets are sent via Transport. Currently, there are two transports available:
-1. Yandex - sends packets via Yandex Docs cursor messages;
-2. Max - sends packets via WebRTC DataChannel.
-
-Client side runs a SOCKS5 proxy, exit node decapsulates and forwards packets to destination point.
-
-## Structure
-
-```
-ferrywire/
-├── main.go
-├── transport/
-│   ├── transport.go      # Transport interface
-│   └── yandex/           # Yandex Docs backend
-│   └── oneme/            # MAX Messenger backend
-├── tunnel/
-│   ├── tunnel.go         # TCP tunnel core
-│   ├── endpoint.go       # Virtual NIC
-│   └── rawsocket.go      # Raw socket (exit node)
-├── socks5/               # SOCKS5 server
-├── network/              # Checksums, packet parsing
-└── utils/                # Debug logging
-```
-
-## Build (desktop client / exit-node binary)
+## Build
 
 ```bash
-go mod tidy
 go build -o ferrywire .
 ```
 
-## Build for Android (client binary)
+Android and iOS helper scripts build client artifacts:
+
 ```bash
 export ANDROID_NDK_HOME=<your Android NDK path>
 ./build_android.sh
-```
 
-## Build for iOS (client binary)
-```bash
-export XCODE_PATH="<your Xcode.app path>" # optional, defaults to /Applications/Xcode.app
+export XCODE_PATH="<your Xcode.app path>"   # optional, defaults to /Applications/Xcode.app
 ./build_ios.sh
 ```
 
+The iOS script requires a cgo export surface (`//export` functions), which the
+current sources do not define; it aborts with guidance until one is added.
+
 ## Usage
 
-### 1. Setting up exit node
-1. You must have root access on exit node machine;
-2. Only legacy Yandex document editor is supported (you can toggle this setting from the interface).
-
-The exit node now auto-configures the required `iptables` rule on startup (inserted at the top of `OUTPUT`, since an appended rule can be silently skipped by firewall managers like ufw whose own jump targets run first). No manual `iptables` step is needed:
+Exit node (needs root; on Linux it auto-installs an `iptables` OUTPUT rule that
+drops outbound RSTs so the kernel does not tear down tunneled connections):
 
 ```bash
-sudo ./ferrywire --exit-node --url "YOUR_YANDEX_DOC_URL" --debug
+sudo ./ferrywire --exit-node --transport yandex --url "YOUR_YANDEX_DOC_URL" --debug
 ```
 
-If auto-configuration fails (e.g. `iptables` not in `PATH`), run it manually instead:
+If the automatic `iptables` rule fails, add it manually:
+
 ```bash
 sudo iptables -I OUTPUT 1 -p tcp --tcp-flags RST RST -j DROP
 ```
 
-### 1. Setting up desktop client:
+Client (exposes a SOCKS5 proxy on 127.0.0.1:1080 by default):
 
-Setup commands for desktop client:
 ```bash
-./ferrywire --client --url "YOUR_YANDEX_DOC_URL" --socks5 :1080 --debug
+./ferrywire --client --transport yandex --url "YOUR_YANDEX_DOC_URL" --socks5 127.0.0.1:1080 --debug
 ```
 
-Then set up SOCKS5 proxy in your browser at localhost:1080.
+Point your browser's SOCKS5 proxy at the client's listen address.
 
 ## Flags
 
-| Flag          | Default             | Description                |
-|---------------|---------------------|----------------------------|
-| `--client`    |                     | Run as client              |
-| `--exit-node` |                     | Run as exit node           |
-| `--socks5`    | `:1080`             | SOCKS5 listen address      |
-| `--url`       | `https://localhost` | Document URL (Yandex Docs) |
-| `--maxToken`  | ``                  | Auth token (Max)           |
-| `--maxUid`    | ``                  | User ID (Max)              |
-| `--debug`     | `false`             | Enable verbose logging     |
-| `--transport` | `yandex`            | Select transport backend   |
+| Flag          | Default            | Description                          |
+|---------------|--------------------|--------------------------------------|
+| `--exit-node` | `false`            | Run as exit node (needs root)        |
+| `--client`    | `false`            | Run as client                        |
+| `--transport` | `yandex`           | Transport backend (`yandex`, `oneme`)|
+| `--socks5`    | `127.0.0.1:1080`   | SOCKS5 listen address                |
+| `--url`       | ``                 | Document URL (Yandex Docs transport) |
+| `--maxToken`  | ``                 | MAX web auth token (MAX transport)   |
+| `--maxUid`    | ``                 | MAX callee user ID (MAX transport)   |
+| `--debug`     | `false`            | Enable verbose debug logging         |
 
-## Implementing custom transports
+Exactly one of `--exit-node` or `--client` must be set.
 
-You are free to implement the `Transport` interface from `transport/transport.go` and register your custom transport in main.go switch block.
+## Layout
+
+```
+main.go              CLI, logging, wiring
+socks5/              SOCKS5 server
+transport/           transport interface + lz4 compression wrapper
+transport/yandex/    Yandex Docs transport
+transport/oneme/     MAX messenger transport
+tunnel/              gVisor TCP tunnel, raw-socket exit endpoint, checksums
+```
+
+## Custom transports
+
+Implement the `Transport` interface from `transport/transport.go` and register
+it in the `main.go` transport switch.

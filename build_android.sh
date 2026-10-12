@@ -5,13 +5,20 @@ ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/27.0.12077973}"
 OUTPUT_DIR="output/android/arm64-v8a"
 BINARY_NAME="ferrywire"
 
+PREBUILT_DIR=$(echo "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/)
+if [ ! -d "$PREBUILT_DIR" ]; then
+    echo "NDK prebuilt toolchain not found under $ANDROID_NDK_HOME/toolchains/llvm/prebuilt" >&2
+    exit 1
+fi
+TOOLCHAIN="${PREBUILT_DIR%/}/bin"
+
 mkdir -p "$OUTPUT_DIR"
 
 export GOARCH=arm64
 export GOOS=android
 export CGO_ENABLED=1
-export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android35-clang"
-export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android35-clang++"
+export CC="$TOOLCHAIN/aarch64-linux-android35-clang"
+export CXX="$TOOLCHAIN/aarch64-linux-android35-clang++"
 export CGO_CFLAGS="-march=armv8-a -O2"
 export CGO_CXXFLAGS="-march=armv8-a -O2"
 export CGO_LDFLAGS="-Wl,-rpath,/system/lib64 -Wl,-rpath,/vendor/lib64"
