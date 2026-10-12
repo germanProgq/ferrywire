@@ -5,14 +5,6 @@ import (
 	"fmt"
 )
 
-func logInfo(format string, args ...interface{}) {
-	fmt.Printf("[INF] "+format+"\n", args...)
-}
-
-func logError(format string, args ...interface{}) {
-	fmt.Printf("[ERR] "+format+"\n", args...)
-}
-
 func genUUID() string {
 	b := make([]byte, 16)
 	rand.Read(b)

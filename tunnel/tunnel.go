@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -15,7 +16,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 
 	"github.com/germanProgq/ferrywire/transport"
-	"github.com/germanProgq/ferrywire/utils"
 )
 
 const (
@@ -40,7 +40,7 @@ func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
 		startTime:  time.Now(),
 	}
 
-	utils.Debugf("[TUNNEL] Net stack init...")
+	slog.Debug("[TUNNEL] Net stack init...")
 	t.gvisorStack = stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
@@ -48,24 +48,24 @@ func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
 
 	if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
 		&tcpip.TCPReceiveBufferSizeRangeOption{Min: 65536, Default: 262144, Max: 1048576}); err != nil {
-		utils.Debugf("[TUNNEL] Failed to set recv buffer: %v", err)
+		slog.Debug(fmt.Sprintf("[TUNNEL] Failed to set recv buffer: %v", err))
 	}
 	if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
 		&tcpip.TCPSendBufferSizeRangeOption{Min: 65536, Default: 262144, Max: 1048576}); err != nil {
-		utils.Debugf("[TUNNEL] Failed to set send buffer: %v", err)
+		slog.Debug(fmt.Sprintf("[TUNNEL] Failed to set send buffer: %v", err))
 	}
 
 	tunnelEP := NewTunnelLinkEndpoint()
 	tunnelEP.onOutgoingPacket = func(data []byte) {
 		if err := trans.Send(data); err != nil {
-			utils.Debugf("[TUNNEL] transport Send dropped %d bytes: %v", len(data), err)
+			slog.Debug(fmt.Sprintf("[TUNNEL] transport Send dropped %d bytes: %v", len(data), err))
 		}
 	}
 	t.tunnelEP = tunnelEP
 
 	tunnelNIC := tunnelNICID
 	if err := t.gvisorStack.CreateNIC(tunnelNIC, tunnelEP); err != nil {
-		utils.Debugf("[TUNNEL] CreateNIC tunnel error: %v", err)
+		slog.Debug(fmt.Sprintf("[TUNNEL] CreateNIC tunnel error: %v", err))
 	}
 
 	if isExitNode {
@@ -84,13 +84,13 @@ func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
 
 func (t *TCPTunnel) setupExitNode(tunnelNIC tcpip.NICID) {
 	localIP := getLocalIP()
-	utils.Debugf("[TUNNEL] EXIT NODE - Local IP: %s", localIP)
+	slog.Debug(fmt.Sprintf("[TUNNEL] EXIT NODE - Local IP: %s", localIP))
 
 	ensureRSTDropRule()
 
 	rawEP, err := NewRawSocketEndpoint(internetNICID)
 	if err != nil {
-		utils.Debugf("[TUNNEL] Raw socket error: %v", err)
+		slog.Debug(fmt.Sprintf("[TUNNEL] Raw socket error: %v", err))
 		return
 	}
 
@@ -101,7 +101,7 @@ func (t *TCPTunnel) setupExitNode(tunnelNIC tcpip.NICID) {
 
 	internetNIC := internetNICID
 	if err := t.gvisorStack.CreateNIC(internetNIC, rawEP); err != nil {
-		utils.Debugf("[TUNNEL] CreateNIC internet error: %v", err)
+		slog.Debug(fmt.Sprintf("[TUNNEL] CreateNIC internet error: %v", err))
 		return
 	}
 
@@ -179,13 +179,13 @@ func (t *TCPTunnel) printStats() {
 
 	for range ticker.C {
 		stats := t.gvisorStack.Stats()
-		utils.Debugf("[STATS] uptime=%v packets=%d connected=%d established=%d retrans=%d",
+		slog.Debug(fmt.Sprintf("[STATS] uptime=%v packets=%d connected=%d established=%d retrans=%d",
 			time.Since(t.startTime).Round(time.Second),
 			t.packetCount.Load(),
 			stats.TCP.CurrentConnected.Value(),
 			stats.TCP.CurrentEstablished.Value(),
 			stats.TCP.Retransmits.Value(),
-		)
+		))
 	}
 }
 

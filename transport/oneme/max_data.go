@@ -42,14 +42,6 @@ type WebRTCConfig struct {
 	TurnUsername      string `json:"trnu"`
 }
 
-type UserInfo struct {
-	ID        int64
-	FirstName string
-	LastName  string
-	FullName  string
-	Phone     int64
-}
-
 type MaxClient struct {
 	conn          *websocket.Conn
 	mu            sync.Mutex

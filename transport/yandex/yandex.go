@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"regexp"
@@ -16,7 +17,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/germanProgq/ferrywire/transport"
-	"github.com/germanProgq/ferrywire/utils"
 )
 
 const (
@@ -161,7 +161,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		return
 	}
 
-	utils.Debugf("[YDOCS] connectToDoc attempt ...")
+	slog.Debug("[YDOCS] connectToDoc attempt ...")
 
 	go func() {
 		t.sessionMu.Lock()
@@ -178,7 +178,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 
 		info, err := t.fetchDocInfo(t.url, userID)
 		if err != nil {
-			utils.Debugf("[YDOCS] fetchDocInfo failed: %v", err)
+			slog.Debug(fmt.Sprintf("[YDOCS] fetchDocInfo failed: %v", err))
 			t.scheduleReconnect(attempt)
 			return
 		}
@@ -192,7 +192,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 
 		conn, _, err := dialer.Dial(info.WsURL, headers)
 		if err != nil {
-			utils.Debugf("[YDOCS] WebSocket dial failed: %v", err)
+			slog.Debug(fmt.Sprintf("[YDOCS] WebSocket dial failed: %v", err))
 			t.scheduleReconnect(attempt)
 			return
 		}
@@ -237,7 +237,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		for t.IsRunning() {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
-				utils.Debugf("[YDOCS] Read error: %v", err)
+				slog.Debug(fmt.Sprintf("[YDOCS] Read error: %v", err))
 				t.SetConnected(false)
 				conn.Close()
 				t.scheduleReconnect(attempt)
@@ -266,7 +266,7 @@ func (t *YandexDocsTransport) writerLoop() {
 			msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
 
 			if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
-				utils.Debugf("[YDOCS] Write error: %v", err)
+				slog.Debug(fmt.Sprintf("[YDOCS] Write error: %v", err))
 			}
 		case <-time.After(time.Second):
 		}
@@ -286,7 +286,7 @@ func (t *YandexDocsTransport) keepAliveLoop() {
 
 		if session != nil && session.Conn != nil {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
-				utils.Debugf("[YDOCS] Keep-alive failed: %v", err)
+				slog.Debug(fmt.Sprintf("[YDOCS] Keep-alive failed: %v", err))
 				t.SetConnected(false)
 			}
 		}
@@ -318,7 +318,7 @@ func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 		decoded, err := base64.StdEncoding.DecodeString(base64Str)
 		if err != nil {
-			utils.Debugf("[YDOCS] Base64 decode error: %v", err)
+			slog.Debug(fmt.Sprintf("[YDOCS] Base64 decode error: %v", err))
 			return
 		}
 

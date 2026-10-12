@@ -1,8 +1,8 @@
 package oneme
 
 import (
+	"log/slog"
 	"github.com/germanProgq/ferrywire/transport"
-	"github.com/germanProgq/ferrywire/utils"
 )
 
 type OneMeTransport struct {
@@ -29,20 +29,20 @@ func NewOneMeTransport(isExit bool, maxToken string, maxUid int64, config transp
 }
 
 func (t *OneMeTransport) Start() error {
-	utils.Debugf("creating max client ...")
+	slog.Debug("creating max client ...")
 	t.oneMeClient = *NewMaxClient()
 	t.oneMeClient.Connect()
 	t.oneMeClient.LoginByToken(t.token)
 
 	if t.exit {
-		utils.Debugf("configured ch for exit node")
+		slog.Debug("configured ch for exit node")
 		t.ch = startIncomingListener(&t.oneMeClient)
 	} else {
-		utils.Debugf("configured ch for client mode")
+		slog.Debug("configured ch for client mode")
 		t.ch = startOutgoingCall(&t.oneMeClient, t.uid)
 	}
 
-	utils.Debugf("configured dc inbound")
+	slog.Debug("configured dc inbound")
 	t.ch.dcInbound = func(data []byte) {
 		t.b.CallReceive(data)
 	}

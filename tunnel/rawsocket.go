@@ -3,6 +3,7 @@ package tunnel
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync/atomic"
 	"time"
@@ -11,8 +12,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
-
-	"github.com/germanProgq/ferrywire/utils"
 )
 
 const (
@@ -73,7 +72,7 @@ func (e *RawSocketEndpoint) readLoop() {
 				time.Sleep(readTimeout)
 				continue
 			}
-			utils.Debugf("[RAW-NIC%d] Read error: %v", e.nicID, err)
+			slog.Debug(fmt.Sprintf("[RAW-NIC%d] Read error: %v", e.nicID, err))
 			return
 		}
 		if n < minIPv4TCPHeader {
@@ -136,7 +135,7 @@ func (e *RawSocketEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpi
 		var dst [4]byte
 		copy(dst[:], pkt[16:20])
 		if err := e.sock.send(pkt, dst); err != nil {
-			utils.Debugf("[RAW-NIC%d] Sendto failed: %v", e.nicID, err)
+			slog.Debug(fmt.Sprintf("[RAW-NIC%d] Sendto failed: %v", e.nicID, err))
 			continue
 		}
 		e.packetOut.Add(1)

@@ -4,10 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
-
-	"github.com/germanProgq/ferrywire/utils"
 )
 
 const (
@@ -45,12 +44,12 @@ func (s *SOCKS5Server) Start() error {
 	}
 	defer listener.Close()
 
-	utils.Debugf("[SOCKS5] Listening on %s", s.listenAddr)
+	slog.Debug(fmt.Sprintf("[SOCKS5] Listening on %s", s.listenAddr))
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			utils.Debugf("[SOCKS5] Accept error: %v", err)
+			slog.Debug(fmt.Sprintf("[SOCKS5] Accept error: %v", err))
 			continue
 		}
 		go s.handleConnection(conn)
@@ -62,15 +61,15 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 
 	targetAddr, err := negotiate(clientConn)
 	if err != nil {
-		utils.Debugf("[SOCKS5] Handshake failed: %v", err)
+		slog.Debug(fmt.Sprintf("[SOCKS5] Handshake failed: %v", err))
 		return
 	}
 
-	utils.Debugf("[SOCKS5] CONNECT %s", targetAddr)
+	slog.Debug(fmt.Sprintf("[SOCKS5] CONNECT %s", targetAddr))
 
 	targetConn, err := s.dialer.DialTCP(targetAddr)
 	if err != nil {
-		utils.Debugf("[SOCKS5] Dial failed: %v", err)
+		slog.Debug(fmt.Sprintf("[SOCKS5] Dial failed: %v", err))
 		clientConn.Write([]byte{socksVersion, 0x04, 0x00, atypIPv4, 0, 0, 0, 0, 0, 0})
 		return
 	}

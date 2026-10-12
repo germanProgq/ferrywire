@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -26,18 +27,18 @@ func (h *CallHandler) Send(data []byte) {
 }
 
 func (h *CallHandler) readLoop() {
-	logInfo("[%s] Signaling connected", h.tag)
+	slog.Debug(fmt.Sprintf("[%s] Signaling connected", h.tag))
 	for {
 		_, message, err := h.conn.ReadMessage()
 		if err != nil {
-			logError("[%s] Signaling disconnected: %v", h.tag, err)
+			slog.Error(fmt.Sprintf("[%s] Signaling disconnected: %v", h.tag, err))
 			h.signalReconnect()
 			return
 		}
 		text := string(message)
 
 		if strings.Contains(text, "accepted-call") {
-			fmt.Println("call accepted")
+			slog.Debug("call accepted")
 			h.callAccepted = true
 			continue
 		}
@@ -61,7 +62,7 @@ func (h *CallHandler) readLoop() {
 			continue
 		}
 		if t, _ := data["type"].(string); t == "error" {
-			logError("[%s] SIGNALING ERROR: %v", h.tag, data["message"])
+			slog.Error(fmt.Sprintf("[%s] SIGNALING ERROR: %v", h.tag, data["message"]))
 			continue
 		}
 
@@ -80,7 +81,7 @@ func (h *CallHandler) signalReconnect() {
 		}
 		return
 	}
-	logError("[%s] Receiver connection died", h.tag)
+	slog.Error(fmt.Sprintf("[%s] Receiver connection died", h.tag))
 }
 
 func (h *CallHandler) sendAcceptCall() {
@@ -96,19 +97,19 @@ func (h *CallHandler) sendAcceptCall() {
 	msg := fmt.Sprintf(`{"command":"accept-call","sequence":%d,"mediaSettings":{"isAudioEnabled":true,"isVideoEnabled":false,"isScreenSharingEnabled":false,"isFastScreenSharingEnabled":false,"isAudioSharingEnabled":false,"isAnimojiEnabled":false}}`, h.seq)
 	h.seq++
 	h.conn.WriteMessage(websocket.TextMessage, []byte(msg))
-	logInfo("[%s] Accept-call sent", h.tag)
+	slog.Debug(fmt.Sprintf("[%s] Accept-call sent", h.tag))
 }
 
 func (h *CallHandler) createPeerConnection(convParams map[string]interface{}) {
-	logInfo("[%s] Creating PeerConnection...", h.tag)
+	slog.Debug(fmt.Sprintf("[%s] Creating PeerConnection...", h.tag))
 	turn, ok := convParams["turn"].(map[string]interface{})
 	if !ok {
-		logError("[%s] conversationParams missing turn", h.tag)
+		slog.Error(fmt.Sprintf("[%s] conversationParams missing turn", h.tag))
 		return
 	}
 	stun, ok := convParams["stun"].(map[string]interface{})
 	if !ok {
-		logError("[%s] conversationParams missing stun", h.tag)
+		slog.Error(fmt.Sprintf("[%s] conversationParams missing stun", h.tag))
 		return
 	}
 	var stunURLs, turnURLs []string
@@ -122,7 +123,7 @@ func (h *CallHandler) createPeerConnection(convParams map[string]interface{}) {
 	}
 	username, _ := turn["username"].(string)
 	credential, _ := turn["credential"].(string)
-	logInfo("[%s] STUN: %v  TURN: %v", h.tag, stunURLs, turnURLs)
+	slog.Debug(fmt.Sprintf("[%s] STUN: %v  TURN: %v", h.tag, stunURLs, turnURLs))
 
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
@@ -138,7 +139,7 @@ func (h *CallHandler) createPeerConnection(convParams map[string]interface{}) {
 
 	pc, err := webrtc.NewPeerConnection(config)
 	if err != nil {
-		logError("[%s] ERROR creating PC: %v", h.tag, err)
+		slog.Error(fmt.Sprintf("[%s] ERROR creating PC: %v", h.tag, err))
 		return
 	}
 	h.pc = pc
@@ -146,33 +147,33 @@ func (h *CallHandler) createPeerConnection(convParams map[string]interface{}) {
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c != nil {
 			jsonC, _ := json.Marshal(c.ToJSON())
-			logInfo("[%s] Local ICE: %s", h.tag, string(jsonC))
+			slog.Debug(fmt.Sprintf("[%s] Local ICE: %s", h.tag, string(jsonC)))
 			h.sendICE(string(jsonC))
 		} else {
-			logInfo("[%s] ICE gathering complete", h.tag)
+			slog.Debug(fmt.Sprintf("[%s] ICE gathering complete", h.tag))
 		}
 	})
 	pc.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
-		logInfo("[%s] ICE: %s", h.tag, s.String())
+		slog.Debug(fmt.Sprintf("[%s] ICE: %s", h.tag, s.String()))
 	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		logInfo("[%s] Connection: %s", h.tag, s.String())
+		slog.Debug(fmt.Sprintf("[%s] Connection: %s", h.tag, s.String()))
 		if s == webrtc.PeerConnectionStateConnected {
-			logInfo("[%s] *** CONNECTED! ***", h.tag)
+			slog.Debug(fmt.Sprintf("[%s] *** CONNECTED! ***", h.tag))
 		}
 	})
 	pc.OnSignalingStateChange(func(s webrtc.SignalingState) {
-		logInfo("[%s] Signaling: %s", h.tag, s.String())
+		slog.Debug(fmt.Sprintf("[%s] Signaling: %s", h.tag, s.String()))
 	})
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		dcID := uint16(0)
 		if dc.ID() != nil {
 			dcID = *dc.ID()
 		}
-		logInfo("[%s] Remote DC: %s (id=%d)", h.tag, dc.Label(), dcID)
+		slog.Debug(fmt.Sprintf("[%s] Remote DC: %s (id=%d)", h.tag, dc.Label(), dcID))
 		h.dc = dc
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-			logInfo("[%s] RECV: %s", h.tag, string(msg.Data))
+			slog.Debug(fmt.Sprintf("[%s] RECV: %s", h.tag, string(msg.Data)))
 			h.dcInbound(msg.Data)
 		})
 	})
@@ -183,15 +184,15 @@ func (h *CallHandler) createPeerConnection(convParams map[string]interface{}) {
 		Ordered: &ordered, MaxRetransmits: &maxRetransmits,
 	})
 	if err != nil {
-		logError("[%s] ERROR creating DC: %v", h.tag, err)
+		slog.Error(fmt.Sprintf("[%s] ERROR creating DC: %v", h.tag, err))
 		return
 	}
 	if dc == nil {
-		logError("[%s] DC is nil", h.tag)
+		slog.Error(fmt.Sprintf("[%s] DC is nil", h.tag))
 		return
 	}
 	h.dc = dc
-	dc.OnOpen(func() { logInfo("[%s] DC opened", h.tag) })
+	dc.OnOpen(func() { slog.Debug(fmt.Sprintf("[%s] DC opened", h.tag)) })
 	dc.OnMessage(func(msg webrtc.DataChannelMessage) {
 		h.dcInbound(msg.Data)
 	})
@@ -207,8 +208,8 @@ func (h *CallHandler) sendSDP(sdp string, sdpType string) {
 	msg := fmt.Sprintf(`{"command":"transmit-data","sequence":%d,"participantId":%d,"data":{"sdp":{"type":"%s","sdp":%s},"animojiVersion":1},"participantType":"USER"}`,
 		h.seq, h.localID, sdpType, string(escaped))
 	h.seq++
-	logInfo("[%s] Sent SDP %s (%d bytes)", h.tag, sdpType, len(sdp))
-	fmt.Println(msg)
+	slog.Debug(fmt.Sprintf("[%s] Sent SDP %s (%d bytes)", h.tag, sdpType, len(sdp)))
+	slog.Debug(msg)
 }
 
 func (h *CallHandler) injectICE(payload []byte) {
@@ -261,14 +262,14 @@ func (h *CallHandler) addICECandidate(c map[string]interface{}) {
 	if err := h.pc.AddICECandidate(webrtc.ICECandidateInit{
 		Candidate: candidateStr, SDPMid: &sdpMid, SDPMLineIndex: &sdpMLineIndex,
 	}); err != nil {
-		logError("[%s] ICE error: %v", h.tag, err)
+		slog.Error(fmt.Sprintf("[%s] ICE error: %v", h.tag, err))
 	}
 }
 
 func (h *CallHandler) bufferOrAddICE(c map[string]interface{}) {
 	if !h.hasRemoteDesc {
 		h.pendingCandidates = append(h.pendingCandidates, c)
-		logInfo("[%s] Buffered ICE (%d total)", h.tag, len(h.pendingCandidates))
+		slog.Debug(fmt.Sprintf("[%s] Buffered ICE (%d total)", h.tag, len(h.pendingCandidates)))
 	} else {
 		h.addICECandidate(c)
 	}
@@ -278,7 +279,7 @@ func (h *CallHandler) flushPendingCandidates() {
 	if len(h.pendingCandidates) == 0 {
 		return
 	}
-	logInfo("[%s] Flushing %d buffered ICE", h.tag, len(h.pendingCandidates))
+	slog.Debug(fmt.Sprintf("[%s] Flushing %d buffered ICE", h.tag, len(h.pendingCandidates)))
 	for _, c := range h.pendingCandidates {
 		h.addICECandidate(c)
 	}
@@ -289,35 +290,35 @@ func (h *CallHandler) handleSDP(sdpType string, sdpStr string) {
 	if h.pc == nil {
 		return
 	}
-	logInfo("[%s] handleSDP: %s (%d bytes)", h.tag, sdpType, len(sdpStr))
+	slog.Debug(fmt.Sprintf("[%s] handleSDP: %s (%d bytes)", h.tag, sdpType, len(sdpStr)))
 
 	switch sdpType {
 	case "offer":
-		logInfo("[%s] Setting remote offer...", h.tag)
+		slog.Debug(fmt.Sprintf("[%s] Setting remote offer...", h.tag))
 		if err := h.pc.SetRemoteDescription(webrtc.SessionDescription{
 			Type: webrtc.SDPTypeOffer, SDP: sdpStr,
 		}); err != nil {
-			logError("[%s] ERROR: %v", h.tag, err)
+			slog.Error(fmt.Sprintf("[%s] ERROR: %v", h.tag, err))
 			return
 		}
 		time.Sleep(300 * time.Millisecond)
 		h.hasRemoteDesc = true
 		h.flushPendingCandidates()
 
-		logInfo("[%s] Creating answer...", h.tag)
+		slog.Debug(fmt.Sprintf("[%s] Creating answer...", h.tag))
 		answer, err := h.pc.CreateAnswer(nil)
 		if err != nil {
-			logError("[%s] ERROR: %v", h.tag, err)
+			slog.Error(fmt.Sprintf("[%s] ERROR: %v", h.tag, err))
 			return
 		}
 		h.sendSDP(answer.SDP, "answer")
 
 	case "answer":
-		logInfo("[%s] Setting remote answer...", h.tag)
+		slog.Debug(fmt.Sprintf("[%s] Setting remote answer...", h.tag))
 		if err := h.pc.SetRemoteDescription(webrtc.SessionDescription{
 			Type: webrtc.SDPTypeAnswer, SDP: sdpStr,
 		}); err != nil {
-			logError("[%s] ERROR: %v", h.tag, err)
+			slog.Error(fmt.Sprintf("[%s] ERROR: %v", h.tag, err))
 			return
 		}
 		h.hasRemoteDesc = true
@@ -372,15 +373,15 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 		if h.localID == 0 {
 			if id, ok := localParticipantID(data, false); ok {
 				h.localID = id
-				logInfo("[%s] Local ID: %d", h.tag, h.localID)
+				slog.Debug(fmt.Sprintf("[%s] Local ID: %d", h.tag, h.localID))
 			}
 		}
 
 		if cp, ok := data["conversationParams"].(map[string]interface{}); ok {
-			logInfo("[%s] conversationParams - creating offer", h.tag)
+			slog.Debug(fmt.Sprintf("[%s] conversationParams - creating offer", h.tag))
 			for {
 				time.Sleep(1 * time.Second)
-				fmt.Println("waiting for accept ...")
+				slog.Debug("waiting for accept ...")
 				if h.callAccepted || useICEInjection {
 					break
 				}
@@ -389,7 +390,7 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 			time.Sleep(200 * time.Millisecond)
 			offer, err := h.pc.CreateOffer(nil)
 			if err != nil {
-				logError("[%s] ERROR: %v", h.tag, err)
+				slog.Error(fmt.Sprintf("[%s] ERROR: %v", h.tag, err))
 				return
 			}
 			h.sendSDP(offer.SDP, "offer")
@@ -421,7 +422,7 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 		}
 	}
 
-	logInfo("[CALLER] Calling %d", calleeID)
+	slog.Debug(fmt.Sprintf("[CALLER] Calling %d", calleeID))
 
 	go func() {
 		for {
@@ -445,7 +446,7 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 				"isVideo":        false,
 			})
 			if err != nil || resp == nil {
-				logError("[CALLER] start-call invoke failed: %v", err)
+				slog.Error(fmt.Sprintf("[CALLER] start-call invoke failed: %v", err))
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -458,7 +459,7 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 			endpoint := params.Endpoint + "&platform=WEB&appVersion=1.1&version=5&device=browser&capabilities=2A03F&clientType=ONE_ME&tgt=start"
 			conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
 			if err != nil {
-				logError("[CALLER] Dial error: %v, retrying...", err)
+				slog.Error(fmt.Sprintf("[CALLER] Dial error: %v, retrying...", err))
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -468,7 +469,7 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 			go h.readLoop()
 
 			<-h.reconnectCh
-			logInfo("[CALLER] Reconnecting in 1s...")
+			slog.Debug("[CALLER] Reconnecting in 1s...")
 			time.Sleep(1 * time.Second)
 		}
 	}()
@@ -486,7 +487,7 @@ func startIncomingListener(client *MaxClient) *CallHandler {
 		if h.localID == 0 {
 			if id, ok := localParticipantID(data, true); ok {
 				h.localID = id
-				logInfo("[%s] Local ID: %d", h.tag, h.localID)
+				slog.Debug(fmt.Sprintf("[%s] Local ID: %d", h.tag, h.localID))
 			}
 		}
 
@@ -517,23 +518,23 @@ func startIncomingListener(client *MaxClient) *CallHandler {
 
 	client.SetEventCallback(func(p MaxPacket) {
 		if p.Opcode == opcodeIncomingCall {
-			logInfo("[RECEIVER] Incoming call!")
+			slog.Debug("[RECEIVER] Incoming call!")
 			var payload map[string]interface{}
 			json.Unmarshal(p.Payload, &payload)
 			convID, _ := payload["conversationId"].(string)
 			vcp, _ := payload["vcp"].(string)
 			callDetails, err := decodeCallDetails(vcp)
 			if err != nil {
-				logError("[RECEIVER] Decode error: %v", err)
+				slog.Error(fmt.Sprintf("[RECEIVER] Decode error: %v", err))
 				return
 			}
 
 			endpoint := craftEndpoint(convID, callDetails)
-			logInfo("[RECEIVER] Initial endpoint: %s", endpoint)
+			slog.Debug(fmt.Sprintf("[RECEIVER] Initial endpoint: %s", endpoint))
 
 			conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
 			if err != nil {
-				logError("[RECEIVER] Connect error: %v", err)
+				slog.Error(fmt.Sprintf("[RECEIVER] Connect error: %v", err))
 				return
 			}
 			h.mu.Lock()
@@ -551,6 +552,6 @@ func startIncomingListener(client *MaxClient) *CallHandler {
 			}()
 		}
 	})
-	logInfo("[RECEIVER] Waiting for calls...")
+	slog.Debug("[RECEIVER] Waiting for calls...")
 	return h
 }
