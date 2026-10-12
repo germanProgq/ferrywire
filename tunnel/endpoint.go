@@ -9,7 +9,6 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
-	"github.com/germanProgq/ferrywire/network"
 	"github.com/germanProgq/ferrywire/utils"
 )
 
@@ -26,7 +25,7 @@ func NewTunnelLinkEndpoint() *TunnelLinkEndpoint {
 
 func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
 	e.packetIn.Add(1)
-	utils.Debugf("<- %d bytes - %s\n", len(data), network.ParsePacketInfo(data))
+	utils.Debugf("<- %d bytes - %s\n", len(data), parsePacketInfo(data))
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData(append([]byte{}, data...)),
 	})

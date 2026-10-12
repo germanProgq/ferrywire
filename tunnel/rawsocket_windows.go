@@ -2,37 +2,19 @@ package tunnel
 
 import (
 	"fmt"
-	"net"
-	"sync/atomic"
-	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
-
-	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/header"
-	"gvisor.dev/gvisor/pkg/tcpip/stack"
-
-	"github.com/germanProgq/ferrywire/network"
-	"github.com/germanProgq/ferrywire/utils"
 )
 
-const (
-	IPPROTO_RAW = 255
-)
+const protoRaw = 255
 
-type RawSocketEndpoint struct {
-	dispatcher      stack.NetworkDispatcher
-	sendFd          windows.Handle
-	recvFd          windows.Handle
-	nicID           tcpip.NICID
-	packetOut       atomic.Uint64
-	tracker         *connTracker
-	sendToTransport func([]byte)
+type windowsRawSocket struct {
+	sendFd windows.Handle
+	recvFd windows.Handle
 }
 
-func NewRawSocketEndpoint(nicID tcpip.NICID) (*RawSocketEndpoint, error) {
-	sendFd, err := windows.Socket(windows.AF_INET, windows.SOCK_RAW, IPPROTO_RAW)
+func openRawSocket() (rawSocket, error) {
+	sendFd, err := windows.Socket(windows.AF_INET, windows.SOCK_RAW, protoRaw)
 	if err != nil {
 		return nil, fmt.Errorf("send socket failed: %v (need admin)", err)
 	}
@@ -48,180 +30,31 @@ func NewRawSocketEndpoint(nicID tcpip.NICID) (*RawSocketEndpoint, error) {
 		return nil, fmt.Errorf("recv socket failed: %v (need admin)", err)
 	}
 
-	addr := &windows.SockaddrInet4{
-		Addr: [4]byte{0, 0, 0, 0},
-		Port: 0,
-	}
-	if err := windows.Bind(recvFd, addr); err != nil {
+	if err := windows.Bind(recvFd, &windows.SockaddrInet4{Addr: [4]byte{0, 0, 0, 0}, Port: 0}); err != nil {
 		windows.Close(sendFd)
 		windows.Close(recvFd)
 		return nil, fmt.Errorf("bind failed: %v", err)
 	}
 
-	ep := &RawSocketEndpoint{
-		sendFd:  sendFd,
-		recvFd:  recvFd,
-		nicID:   nicID,
-		tracker: newConnTracker(),
-	}
-
-	go ep.readLoop()
-	go ep.tracker.evictLoop()
-	return ep, nil
+	return &windowsRawSocket{sendFd: sendFd, recvFd: recvFd}, nil
 }
 
-func (e *RawSocketEndpoint) SetTransportSender(sendFunc func([]byte)) {
-	e.sendToTransport = sendFunc
-}
-
-func (e *RawSocketEndpoint) readLoop() {
-	buf := make([]byte, 65535)
-
-	for {
-		n, _, err := windows.Recvfrom(e.recvFd, buf, 0)
-		if err != nil {
-			if err == windows.WSAEWOULDBLOCK {
-				time.Sleep(10 * time.Millisecond)
-				continue
-			}
-			utils.Debugf("[RAW-NIC%d] Read error: %v", e.nicID, err)
-			return
+func (s *windowsRawSocket) recv(buf []byte) (int, error) {
+	n, _, err := windows.Recvfrom(s.recvFd, buf, 0)
+	if err != nil {
+		if err == windows.WSAEWOULDBLOCK {
+			return 0, errWouldBlock
 		}
-		if n < 40 {
-			continue
-		}
-
-		protocol := buf[9]
-		flags := buf[33]
-		dstIP := net.IP(buf[16:20])
-		localIP := getLocalIP()
-
-		if protocol == 6 && dstIP.String() == localIP {
-			dstPort := uint16(buf[22])<<8 | uint16(buf[23])
-
-			if !e.tracker.isActive(dstPort) {
-				continue
-			}
-
-			if flags == 0x12 {
-				ackNum := uint32(buf[28])<<24 | uint32(buf[29])<<16 | uint32(buf[30])<<8 | uint32(buf[31])
-				synSeq := ackNum - 1
-
-				if !e.tracker.consumeSYNACK(synSeq) {
-					continue
-				}
-			}
-
-			pktCopy := make([]byte, n)
-			copy(pktCopy, buf[:n])
-
-			copy(pktCopy[16:20], []byte{10, 10, 10, 2})
-
-			pktCopy[10] = 0
-			pktCopy[11] = 0
-			ipChecksumVal := network.IPChecksum(pktCopy[:20])
-			pktCopy[10] = byte(ipChecksumVal >> 8)
-			pktCopy[11] = byte(ipChecksumVal & 0xFF)
-
-			ipHeaderLen := int(pktCopy[0]&0x0F) * 4
-			tcpHeader := pktCopy[ipHeaderLen:]
-			srcIPBytes := [4]byte{pktCopy[12], pktCopy[13], pktCopy[14], pktCopy[15]}
-			dstIPBytes := [4]byte{pktCopy[16], pktCopy[17], pktCopy[18], pktCopy[19]}
-			tcpHeader[16] = 0
-			tcpHeader[17] = 0
-			tcpChecksumVal := network.TCPChecksum(tcpHeader, srcIPBytes, dstIPBytes)
-			tcpHeader[16] = byte(tcpChecksumVal >> 8)
-			tcpHeader[17] = byte(tcpChecksumVal & 0xFF)
-
-			if e.sendToTransport != nil {
-				e.sendToTransport(pktCopy)
-			}
-		}
-	}
-}
-
-func (e *RawSocketEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
-	n := 0
-	for _, pkt := range pkts.AsSlice() {
-		ipPacket := pkt.ToView().ToSlice()
-		if len(ipPacket) < 40 {
-			continue
-		}
-
-		pktCopy := make([]byte, len(ipPacket))
-		copy(pktCopy, ipPacket)
-
-		localIP := getLocalIP()
-		var localIPBytes [4]byte
-		fmt.Sscanf(localIP, "%d.%d.%d.%d", &localIPBytes[0], &localIPBytes[1], &localIPBytes[2], &localIPBytes[3])
-		copy(pktCopy[12:16], localIPBytes[:])
-
-		pktCopy[10] = 0
-		pktCopy[11] = 0
-		ipChecksumVal := network.IPChecksum(pktCopy[:20])
-		pktCopy[10] = byte(ipChecksumVal >> 8)
-		pktCopy[11] = byte(ipChecksumVal & 0xFF)
-
-		ipHeaderLen := int(pktCopy[0]&0x0F) * 4
-		tcpHeader := pktCopy[ipHeaderLen:]
-		srcIPBytes := [4]byte{pktCopy[12], pktCopy[13], pktCopy[14], pktCopy[15]}
-		dstIPBytes := [4]byte{pktCopy[16], pktCopy[17], pktCopy[18], pktCopy[19]}
-		tcpHeader[16] = 0
-		tcpHeader[17] = 0
-		tcpChecksumVal := network.TCPChecksum(tcpHeader, srcIPBytes, dstIPBytes)
-		tcpHeader[16] = byte(tcpChecksumVal >> 8)
-		tcpHeader[17] = byte(tcpChecksumVal & 0xFF)
-
-		srcPort := uint16(tcpHeader[0])<<8 | uint16(tcpHeader[1])
-
-		if tcpHeader[13]&0x02 != 0 {
-			seqNum := uint32(tcpHeader[4])<<24 | uint32(tcpHeader[5])<<16 | uint32(tcpHeader[6])<<8 | uint32(tcpHeader[7])
-			e.tracker.recordSYN(seqNum, srcPort)
-		}
-
-		if tcpHeader[13]&0x01 != 0 || tcpHeader[13]&0x04 != 0 {
-			e.tracker.closePort(srcPort)
-		}
-
-		var dst [4]byte
-		copy(dst[:], pktCopy[16:20])
-
-		addr := &windows.SockaddrInet4{
-			Addr: dst,
-			Port: 0,
-		}
-
-		if err := windows.Sendto(e.sendFd, pktCopy, 0, addr); err != nil {
-			utils.Debugf("[RAW-NIC%d] Sendto failed: %v", e.nicID, err)
-			continue
-		}
-
-		e.packetOut.Add(1)
-		n++
+		return 0, err
 	}
 	return n, nil
 }
 
-func (e *RawSocketEndpoint) MTU() uint32                    { return 1500 }
-func (e *RawSocketEndpoint) MaxHeaderLength() uint16        { return 0 }
-func (e *RawSocketEndpoint) LinkAddress() tcpip.LinkAddress { return "" }
-func (e *RawSocketEndpoint) Capabilities() stack.LinkEndpointCapabilities {
-	return stack.CapabilityNone
+func (s *windowsRawSocket) send(packet []byte, dst [4]byte) error {
+	return windows.Sendto(s.sendFd, packet, 0, &windows.SockaddrInet4{Addr: dst, Port: 0})
 }
-func (e *RawSocketEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
-	e.dispatcher = dispatcher
-}
-func (e *RawSocketEndpoint) IsAttached() bool                        { return e.dispatcher != nil }
-func (e *RawSocketEndpoint) Wait()                                   {}
-func (e *RawSocketEndpoint) ARPHardwareType() header.ARPHardwareType { return header.ARPHardwareNone }
-func (e *RawSocketEndpoint) AddHeader(*stack.PacketBuffer)           {}
-func (e *RawSocketEndpoint) Close() {
-	windows.Close(e.sendFd)
-	windows.Close(e.recvFd)
-}
-func (e *RawSocketEndpoint) SetMTU(uint32)                        {}
-func (e *RawSocketEndpoint) SetLinkAddress(tcpip.LinkAddress)     {}
-func (e *RawSocketEndpoint) ParseHeader(*stack.PacketBuffer) bool { return true }
-func (e *RawSocketEndpoint) SetOnCloseAction(func())              {}
 
-var _ = unsafe.Sizeof(0)
+func (s *windowsRawSocket) close() error {
+	windows.Close(s.sendFd)
+	return windows.Close(s.recvFd)
+}
