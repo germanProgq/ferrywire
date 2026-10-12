@@ -97,3 +97,50 @@ func TestParsePacketInfoFlags(t *testing.T) {
 		t.Fatal("expected non-empty packet info")
 	}
 }
+
+func outboundSegment(localPort uint16, flags byte) []byte {
+	pkt := sampleTCPPacket()
+	tcp := pkt[20:]
+	tcp[0], tcp[1] = byte(localPort>>8), byte(localPort)
+	tcp[13] = flags
+	return tcp
+}
+
+func inboundSegment(localPort uint16, flags byte) []byte {
+	pkt := sampleTCPPacket()
+	local := localIPBytes()
+	copy(pkt[12:16], []byte{93, 184, 216, 34})
+	copy(pkt[16:20], local[:])
+	tcp := pkt[20:]
+	tcp[0], tcp[1] = 0x01, 0xBB
+	tcp[2], tcp[3] = byte(localPort>>8), byte(localPort)
+	tcp[13] = flags
+	return pkt
+}
+
+func TestInboundAcceptedAfterOutboundFIN(t *testing.T) {
+	e := &RawSocketEndpoint{tracker: newConnTracker()}
+	const port = 50123
+
+	e.trackOutbound(outboundSegment(port, synFlag))
+	e.trackOutbound(outboundSegment(port, finFlag|0x10))
+
+	if e.rewriteInbound(inboundSegment(port, 0x10)) == nil {
+		t.Fatal("ACK of our FIN must still be forwarded")
+	}
+	if e.rewriteInbound(inboundSegment(port, finFlag|0x10)) == nil {
+		t.Fatal("remote FIN after our FIN must still be forwarded")
+	}
+}
+
+func TestInboundDroppedAfterOutboundRST(t *testing.T) {
+	e := &RawSocketEndpoint{tracker: newConnTracker()}
+	const port = 50124
+
+	e.trackOutbound(outboundSegment(port, synFlag))
+	e.trackOutbound(outboundSegment(port, rstFlag))
+
+	if e.rewriteInbound(inboundSegment(port, 0x10)) != nil {
+		t.Fatal("packets after our RST must be dropped")
+	}
+}

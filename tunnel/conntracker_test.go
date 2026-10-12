@@ -54,3 +54,38 @@ func TestConnTrackerEvictsStaleSYNs(t *testing.T) {
 		t.Fatal("stale SYN must be evicted")
 	}
 }
+
+func TestConnTrackerClosingPortEvictedAfterTTL(t *testing.T) {
+	now := time.Unix(0, 0)
+	tr := newConnTracker()
+	tr.now = func() time.Time { return now }
+
+	tr.recordSYN(1, 45000)
+	tr.markClosing(45000)
+
+	now = now.Add(closingTTL / 2)
+	tr.markClosing(45000)
+	tr.evictStale()
+	if !tr.isActive(45000) {
+		t.Fatal("closing port must stay active within the grace period")
+	}
+
+	now = now.Add(closingTTL)
+	tr.evictStale()
+	if tr.isActive(45000) {
+		t.Fatal("closing port must be evicted after the grace period")
+	}
+}
+
+func TestConnTrackerActivePortNotEvicted(t *testing.T) {
+	now := time.Unix(0, 0)
+	tr := newConnTracker()
+	tr.now = func() time.Time { return now }
+
+	tr.recordSYN(1, 46000)
+	now = now.Add(closingTTL * 10)
+	tr.evictStale()
+	if !tr.isActive(46000) {
+		t.Fatal("open connection must not be evicted")
+	}
+}

@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -55,7 +56,7 @@ func NewRawSocketEndpoint(nicID tcpip.NICID) (*RawSocketEndpoint, error) {
 		tracker: newConnTracker(),
 	}
 	go ep.readLoop()
-	go ep.tracker.evictLoop()
+	go ep.tracker.evictLoop(context.Background())
 	return ep, nil
 }
 
@@ -122,15 +123,7 @@ func (e *RawSocketEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpi
 		copy(pkt, ipPacket)
 		setSourceIP(pkt, localIPBytes())
 
-		tcpHeader := pkt[ipHeaderLen(pkt):]
-		srcPort := uint16(tcpHeader[0])<<8 | uint16(tcpHeader[1])
-		if tcpHeader[13]&synFlag != 0 {
-			seq := uint32(tcpHeader[4])<<24 | uint32(tcpHeader[5])<<16 | uint32(tcpHeader[6])<<8 | uint32(tcpHeader[7])
-			e.tracker.recordSYN(seq, srcPort)
-		}
-		if tcpHeader[13]&finFlag != 0 || tcpHeader[13]&rstFlag != 0 {
-			e.tracker.closePort(srcPort)
-		}
+		e.trackOutbound(pkt[ipHeaderLen(pkt):])
 
 		var dst [4]byte
 		copy(dst[:], pkt[16:20])
@@ -142,6 +135,20 @@ func (e *RawSocketEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpi
 		written++
 	}
 	return written, nil
+}
+
+func (e *RawSocketEndpoint) trackOutbound(tcpHeader []byte) {
+	srcPort := uint16(tcpHeader[0])<<8 | uint16(tcpHeader[1])
+	flags := tcpHeader[13]
+	switch {
+	case flags&rstFlag != 0:
+		e.tracker.closePort(srcPort)
+	case flags&synFlag != 0:
+		seq := uint32(tcpHeader[4])<<24 | uint32(tcpHeader[5])<<16 | uint32(tcpHeader[6])<<8 | uint32(tcpHeader[7])
+		e.tracker.recordSYN(seq, srcPort)
+	case flags&finFlag != 0:
+		e.tracker.markClosing(srcPort)
+	}
 }
 
 func ipHeaderLen(pkt []byte) int {
