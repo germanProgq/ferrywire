@@ -362,7 +362,7 @@ func localParticipantID(data map[string]interface{}, wantCreator bool) (int64, b
 	return id, found
 }
 
-func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
+func startOutgoingCall(client *Client, calleeID int64) *CallHandler {
 	h := &CallHandler{tag: "CALLER", role: "caller"}
 	h.seq = 1
 	h.reconnectCh = make(chan struct{}, 1)
@@ -477,7 +477,7 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 	return h
 }
 
-func startIncomingListener(client *MaxClient) *CallHandler {
+func startIncomingListener(client *Client) *CallHandler {
 	h := &CallHandler{tag: "RECEIVER", role: "receiver"}
 	h.seq = 1
 	h.msgHandler = func(text string) {
@@ -516,7 +516,7 @@ func startIncomingListener(client *MaxClient) *CallHandler {
 		}
 	}
 
-	client.SetEventCallback(func(p MaxPacket) {
+	client.SetEventCallback(func(p Packet) {
 		if p.Opcode == opcodeIncomingCall {
 			slog.Debug("[RECEIVER] Incoming call!")
 			var payload map[string]interface{}

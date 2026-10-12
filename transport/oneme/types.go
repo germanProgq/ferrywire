@@ -9,7 +9,7 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
-type MaxPacket struct {
+type Packet struct {
 	Ver     int             `json:"ver"`
 	Cmd     int             `json:"cmd"`
 	Opcode  int             `json:"opcode"`
@@ -42,7 +42,7 @@ type WebRTCConfig struct {
 	TurnUsername      string `json:"trnu"`
 }
 
-type MaxClient struct {
+type Client struct {
 	conn          *websocket.Conn
 	mu            sync.Mutex
 	seq           atomic.Int64
@@ -50,7 +50,7 @@ type MaxClient struct {
 	deviceID      string
 	loggedIn      bool
 	keepaliveStop chan struct{}
-	onEvent       func(MaxPacket)
+	onEvent       func(Packet)
 }
 
 type CallHandler struct {

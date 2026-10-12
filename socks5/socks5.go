@@ -28,16 +28,16 @@ type Dialer interface {
 	DialTCP(address string) (net.Conn, error)
 }
 
-type SOCKS5Server struct {
+type Server struct {
 	listenAddr string
 	dialer     Dialer
 }
 
-func NewSOCKS5Server(addr string, dialer Dialer) *SOCKS5Server {
-	return &SOCKS5Server{listenAddr: addr, dialer: dialer}
+func NewServer(addr string, dialer Dialer) *Server {
+	return &Server{listenAddr: addr, dialer: dialer}
 }
 
-func (s *SOCKS5Server) Start() error {
+func (s *Server) Start() error {
 	listener, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
 		return fmt.Errorf("socks5 listen on %s: %w", s.listenAddr, err)
@@ -56,7 +56,7 @@ func (s *SOCKS5Server) Start() error {
 	}
 }
 
-func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
+func (s *Server) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
 	targetAddr, err := negotiate(clientConn)

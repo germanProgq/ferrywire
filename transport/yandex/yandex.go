@@ -76,7 +76,7 @@ func drainBatch(q chan []byte, first []byte) [][]byte {
 	return packets
 }
 
-type YandexDocsInfo struct {
+type DocsInfo struct {
 	CookieStr   string
 	Token       string
 	DocID       string
@@ -89,42 +89,42 @@ type YandexDocsInfo struct {
 	OpenCmd     map[string]interface{}
 }
 
-type DocSession struct {
-	Info       YandexDocsInfo
+type Session struct {
+	Info       DocsInfo
 	Conn       *websocket.Conn
 	WriteQueue chan []byte
 	UserID     string
 	writeMu    sync.Mutex
 }
 
-func (s *DocSession) safeWrite(messageType int, data []byte) error {
+func (s *Session) safeWrite(messageType int, data []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.Conn.WriteMessage(messageType, data)
 }
 
-type YandexDocsTransport struct {
-	*transport.BaseTransport
+type Transport struct {
+	*transport.Base
 
 	url       string
-	session   *DocSession
+	session   *Session
 	sessionMu sync.RWMutex
 
 	userCounter atomic.Int32
 	baseUserID  string
 }
 
-func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
-	t := &YandexDocsTransport{
-		BaseTransport: transport.NewBaseTransport(config),
-		url:           url,
+func NewTransport(url string, config transport.Config) *Transport {
+	t := &Transport{
+		Base: transport.NewBase(config),
+		url:  url,
 	}
 	t.baseUserID = randUserID()
 	return t
 }
 
-func (t *YandexDocsTransport) Start() error {
-	if err := t.BaseTransport.Start(); err != nil {
+func (t *Transport) Start() error {
+	if err := t.Base.Start(); err != nil {
 		return err
 	}
 
@@ -135,7 +135,7 @@ func (t *YandexDocsTransport) Start() error {
 	return nil
 }
 
-func (t *YandexDocsTransport) Send(data []byte) error {
+func (t *Transport) Send(data []byte) error {
 	if !t.IsConnected() {
 		return fmt.Errorf("transport not connected")
 	}
@@ -156,7 +156,7 @@ func (t *YandexDocsTransport) Send(data []byte) error {
 	}
 }
 
-func (t *YandexDocsTransport) connectToDoc(attempt int) {
+func (t *Transport) connectToDoc(attempt int) {
 	if !t.IsRunning() {
 		return
 	}
@@ -206,7 +206,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			writeQueue = existingSession.WriteQueue
 		}
 
-		session := &DocSession{
+		session := &Session{
 			Info:       info,
 			Conn:       conn,
 			WriteQueue: writeQueue,
@@ -248,7 +248,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 	}()
 }
 
-func (t *YandexDocsTransport) writerLoop() {
+func (t *Transport) writerLoop() {
 	for t.IsRunning() {
 		t.sessionMu.Lock()
 		session := t.session
@@ -273,7 +273,7 @@ func (t *YandexDocsTransport) writerLoop() {
 	}
 }
 
-func (t *YandexDocsTransport) keepAliveLoop() {
+func (t *Transport) keepAliveLoop() {
 	ticker := time.NewTicker(t.GetConfig().KeepAliveInterval)
 	defer ticker.Stop()
 	keepAliveMsg := `42["message",{"type":"cursor","cursor":"18;---KA---"}]`
@@ -293,7 +293,7 @@ func (t *YandexDocsTransport) keepAliveLoop() {
 	}
 }
 
-func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
+func (t *Transport) handleMessage(session *Session, data []byte) {
 	text := string(data)
 
 	if strings.Contains(text, "---KA---") {
@@ -333,7 +333,7 @@ func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 	}
 }
 
-func (t *YandexDocsTransport) extractBase64String(response string) string {
+func (t *Transport) extractBase64String(response string) string {
 	if strings.Contains(response, "saveChanges") {
 		marker := `"excelAdditionalInfo":"`
 		left := strings.Index(response, marker) + len(marker)
@@ -354,7 +354,7 @@ func (t *YandexDocsTransport) extractBase64String(response string) string {
 	return ""
 }
 
-func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
+func (t *Transport) scheduleReconnect(attempt int) {
 	if !t.IsRunning() || attempt >= t.GetConfig().MaxReconnectAttempts {
 		return
 	}
@@ -362,7 +362,7 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	t.connectToDoc(attempt + 1)
 }
 
-func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, error) {
+func (t *Transport) fetchDocInfo(url, userID string) (DocsInfo, error) {
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { return nil },
 		Timeout:       30 * time.Second,
@@ -372,7 +372,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		return YandexDocsInfo{}, err
+		return DocsInfo{}, err
 	}
 	defer resp.Body.Close()
 
@@ -386,37 +386,37 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 
 	matches := clientConfigRe.FindStringSubmatch(html)
 	if len(matches) < 2 {
-		return YandexDocsInfo{}, fmt.Errorf("config not found")
+		return DocsInfo{}, fmt.Errorf("config not found")
 	}
 
 	var config map[string]interface{}
 	if err := json.Unmarshal([]byte(matches[1]), &config); err != nil {
-		return YandexDocsInfo{}, fmt.Errorf("parse client-config: %w", err)
+		return DocsInfo{}, fmt.Errorf("parse client-config: %w", err)
 	}
 
 	officeAction, ok := mapField(config, "officeActionData")
 	if !ok {
-		return YandexDocsInfo{}, fmt.Errorf("officeActionData missing")
+		return DocsInfo{}, fmt.Errorf("officeActionData missing")
 	}
 	editorConfig, ok := mapField(officeAction, "editor_config")
 	if !ok {
-		return YandexDocsInfo{}, fmt.Errorf("editor_config nil - will reconnect")
+		return DocsInfo{}, fmt.Errorf("editor_config nil - will reconnect")
 	}
 	balancerURL, ok := stringField(officeAction, "balancer_url")
 	if !ok {
-		return YandexDocsInfo{}, fmt.Errorf("balancer_url missing")
+		return DocsInfo{}, fmt.Errorf("balancer_url missing")
 	}
 	document, ok := mapField(editorConfig, "document")
 	if !ok {
-		return YandexDocsInfo{}, fmt.Errorf("document missing")
+		return DocsInfo{}, fmt.Errorf("document missing")
 	}
 	token, ok := stringField(editorConfig, "token")
 	if !ok {
-		return YandexDocsInfo{}, fmt.Errorf("token missing")
+		return DocsInfo{}, fmt.Errorf("token missing")
 	}
 	docKey, ok := stringField(document, "key")
 	if !ok {
-		return YandexDocsInfo{}, fmt.Errorf("document key missing")
+		return DocsInfo{}, fmt.Errorf("document key missing")
 	}
 
 	host := strings.TrimPrefix(balancerURL, "https://")
@@ -425,7 +425,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 		perms = make(map[string]interface{})
 	}
 
-	return YandexDocsInfo{
+	return DocsInfo{
 		CookieStr:   strings.Join(cookies, "; "),
 		Token:       token,
 		DocID:       docKey,

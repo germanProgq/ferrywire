@@ -12,20 +12,20 @@ const (
 	CompressionMarker = 0x1F
 )
 
-type CompressedTransport struct {
+type Compressed struct {
 	Transport
 }
 
-func NewCompressedTransport(inner Transport) Transport {
-	return &CompressedTransport{Transport: inner}
+func NewCompressed(inner Transport) Transport {
+	return &Compressed{Transport: inner}
 }
 
-func (c *CompressedTransport) Send(data []byte) error {
+func (c *Compressed) Send(data []byte) error {
 	compressed := compress(data)
 	return c.Transport.Send(compressed)
 }
 
-func (c *CompressedTransport) Receive(callback func([]byte)) {
+func (c *Compressed) Receive(callback func([]byte)) {
 	c.Transport.Receive(func(data []byte) {
 		decompressed, err := decompress(data)
 		if err != nil {

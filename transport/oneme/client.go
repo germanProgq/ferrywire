@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	WS_HOST     = "wss://ws-api.oneme.ru/websocket"
-	RPC_VERSION = 11
-	USER_AGENT  = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+	wsHost     = "wss://ws-api.oneme.ru/websocket"
+	rpcVersion = 11
+	userAgent  = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 )
 
 const (
@@ -24,20 +24,20 @@ const (
 	opcodeIncomingCall = 137
 )
 
-func NewMaxClient() *MaxClient {
-	return &MaxClient{
+func NewClient() *Client {
+	return &Client{
 		deviceID:      genUUID(),
 		keepaliveStop: make(chan struct{}),
 	}
 }
 
-func (c *MaxClient) Connect() error {
+func (c *Client) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	header := http.Header{}
 	header.Set("Origin", "https://web.max.ru")
-	header.Set("User-Agent", USER_AGENT)
-	conn, _, err := websocket.DefaultDialer.Dial(WS_HOST, header)
+	header.Set("User-Agent", userAgent)
+	conn, _, err := websocket.DefaultDialer.Dial(wsHost, header)
 	if err != nil {
 		return err
 	}
@@ -47,31 +47,31 @@ func (c *MaxClient) Connect() error {
 	return nil
 }
 
-func (c *MaxClient) SetEventCallback(cb func(MaxPacket)) { c.onEvent = cb }
+func (c *Client) SetEventCallback(cb func(Packet)) { c.onEvent = cb }
 
-func (c *MaxClient) readLoop() {
+func (c *Client) readLoop() {
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			return
 		}
-		var packet MaxPacket
+		var packet Packet
 		if json.Unmarshal(message, &packet) != nil {
 			continue
 		}
 		if ch, ok := c.pending.LoadAndDelete(int64(packet.Seq)); ok {
-			ch.(chan MaxPacket) <- packet
+			ch.(chan Packet) <- packet
 		} else if c.onEvent != nil {
 			c.onEvent(packet)
 		}
 	}
 }
 
-func (c *MaxClient) invoke(opcode int, payload map[string]interface{}) (*MaxPacket, error) {
+func (c *Client) invoke(opcode int, payload map[string]interface{}) (*Packet, error) {
 	seq := c.seq.Add(1)
-	req := map[string]interface{}{"ver": RPC_VERSION, "cmd": 0, "seq": seq, "opcode": opcode, "payload": payload}
+	req := map[string]interface{}{"ver": rpcVersion, "cmd": 0, "seq": seq, "opcode": opcode, "payload": payload}
 	data, _ := json.Marshal(req)
-	ch := make(chan MaxPacket, 1)
+	ch := make(chan Packet, 1)
 	c.pending.Store(seq, ch)
 	defer c.pending.Delete(seq)
 	c.mu.Lock()
@@ -88,7 +88,7 @@ func (c *MaxClient) invoke(opcode int, payload map[string]interface{}) (*MaxPack
 	}
 }
 
-func (c *MaxClient) LoginByToken(token string) error {
+func (c *Client) LoginByToken(token string) error {
 	c.invoke(opcodeSessionInit, map[string]interface{}{
 		"userAgent": map[string]interface{}{
 			"deviceType": "WEB", "locale": "ru_RU", "osVersion": "macOS",
@@ -114,7 +114,7 @@ func (c *MaxClient) LoginByToken(token string) error {
 	return nil
 }
 
-func (c *MaxClient) keepalive() {
+func (c *Client) keepalive() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {

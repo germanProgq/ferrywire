@@ -59,7 +59,7 @@ func main() {
 	}
 
 	slog.Info("running as client", "socks5", *socksAddr)
-	server := socks5.NewSOCKS5Server(*socksAddr, tun)
+	server := socks5.NewServer(*socksAddr, tun)
 	go func() {
 		if err := server.Start(); err != nil {
 			slog.Error("socks5 server stopped", "err", err)
@@ -73,13 +73,13 @@ func buildTransport(kind string, exitNode bool, docURL, maxToken, maxUID string)
 	config := transport.DefaultConfig()
 	switch kind {
 	case "yandex":
-		return transport.NewCompressedTransport(yandex.NewYandexDocsTransport(docURL, config)), nil
+		return transport.NewCompressed(yandex.NewTransport(docURL, config)), nil
 	case "oneme":
 		uid, err := strconv.ParseInt(maxUID, 10, 64)
 		if err != nil && !exitNode {
 			return nil, fmt.Errorf("invalid --maxUid %q: %w", maxUID, err)
 		}
-		return transport.NewCompressedTransport(oneme.NewOneMeTransport(exitNode, maxToken, uid, config)), nil
+		return transport.NewCompressed(oneme.NewTransport(exitNode, maxToken, uid, config)), nil
 	default:
 		return nil, fmt.Errorf("unknown transport type: %s", kind)
 	}

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-type TransportConfig struct {
+type Config struct {
 	MaxReconnectAttempts int
 	MaxQueueSize         int
 	KeepAliveInterval    time.Duration
@@ -18,16 +18,16 @@ type Transport interface {
 	Receive(callback func([]byte))
 }
 
-func DefaultConfig() TransportConfig {
-	return TransportConfig{
+func DefaultConfig() Config {
+	return Config{
 		MaxReconnectAttempts: 999999,
 		MaxQueueSize:         8192,
 		KeepAliveInterval:    10 * time.Second,
 	}
 }
 
-type BaseTransport struct {
-	config    TransportConfig
+type Base struct {
+	config    Config
 	running   atomic.Int32
 	connected atomic.Int32
 
@@ -35,24 +35,24 @@ type BaseTransport struct {
 	mu              sync.RWMutex
 }
 
-func NewBaseTransport(config TransportConfig) *BaseTransport {
-	return &BaseTransport{config: config}
+func NewBase(config Config) *Base {
+	return &Base{config: config}
 }
 
-func (b *BaseTransport) Start() error {
+func (b *Base) Start() error {
 	b.running.Store(1)
 	return nil
 }
 
-func (b *BaseTransport) IsRunning() bool {
+func (b *Base) IsRunning() bool {
 	return b.running.Load() == 1
 }
 
-func (b *BaseTransport) IsConnected() bool {
+func (b *Base) IsConnected() bool {
 	return b.connected.Load() == 1
 }
 
-func (b *BaseTransport) SetConnected(connected bool) {
+func (b *Base) SetConnected(connected bool) {
 	if connected {
 		b.connected.Store(1)
 	} else {
@@ -60,13 +60,13 @@ func (b *BaseTransport) SetConnected(connected bool) {
 	}
 }
 
-func (b *BaseTransport) Receive(callback func([]byte)) {
+func (b *Base) Receive(callback func([]byte)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.receiveCallback = callback
 }
 
-func (b *BaseTransport) CallReceive(data []byte) {
+func (b *Base) CallReceive(data []byte) {
 	b.mu.RLock()
 	cb := b.receiveCallback
 	b.mu.RUnlock()
@@ -75,6 +75,6 @@ func (b *BaseTransport) CallReceive(data []byte) {
 	}
 }
 
-func (b *BaseTransport) GetConfig() TransportConfig {
+func (b *Base) GetConfig() Config {
 	return b.config
 }

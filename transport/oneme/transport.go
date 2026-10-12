@@ -5,32 +5,32 @@ import (
 	"github.com/germanProgq/ferrywire/transport"
 )
 
-type OneMeTransport struct {
-	b     *transport.BaseTransport
+type Transport struct {
+	b     *transport.Base
 	token string
 	uid   int64
 	exit  bool
 
-	oneMeClient MaxClient
+	oneMeClient Client
 	ch          *CallHandler
 }
 
-func (t *OneMeTransport) Receive(callback func([]byte)) {
+func (t *Transport) Receive(callback func([]byte)) {
 	t.b.Receive(callback)
 }
 
-func NewOneMeTransport(isExit bool, maxToken string, maxUid int64, config transport.TransportConfig) *OneMeTransport {
-	return &OneMeTransport{
-		b:     transport.NewBaseTransport(config),
+func NewTransport(isExit bool, maxToken string, maxUid int64, config transport.Config) *Transport {
+	return &Transport{
+		b:     transport.NewBase(config),
 		token: maxToken,
 		uid:   maxUid,
 		exit:  isExit,
 	}
 }
 
-func (t *OneMeTransport) Start() error {
+func (t *Transport) Start() error {
 	slog.Debug("creating max client ...")
-	t.oneMeClient = *NewMaxClient()
+	t.oneMeClient = *NewClient()
 	t.oneMeClient.Connect()
 	t.oneMeClient.LoginByToken(t.token)
 
@@ -50,7 +50,7 @@ func (t *OneMeTransport) Start() error {
 	return t.b.Start()
 }
 
-func (t *OneMeTransport) Send(data []byte) error {
+func (t *Transport) Send(data []byte) error {
 	t.ch.Send(data)
 	return nil
 }
