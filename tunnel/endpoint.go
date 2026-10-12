@@ -31,6 +31,7 @@ func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
 		Payload: buffer.MakeWithData(append([]byte{}, data...)),
 	})
 	e.dispatcher.DeliverNetworkPacket(ipv4.ProtocolNumber, pkt)
+	pkt.DecRef()
 }
 
 func (e *TunnelLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {

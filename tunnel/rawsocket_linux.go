@@ -3,7 +3,6 @@ package tunnel
 import (
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -21,10 +20,8 @@ type RawSocketEndpoint struct {
 	sendFd          int
 	recvFd          int
 	nicID           tcpip.NICID
-	packetIn        atomic.Uint64
 	packetOut       atomic.Uint64
-	outgoingSYNs    sync.Map
-	activePorts     sync.Map
+	tracker         *connTracker
 	sendToTransport func([]byte)
 }
 
@@ -60,12 +57,14 @@ func NewRawSocketEndpoint(nicID tcpip.NICID) (*RawSocketEndpoint, error) {
 	}
 
 	ep := &RawSocketEndpoint{
-		sendFd: sendFd,
-		recvFd: recvFd,
-		nicID:  nicID,
+		sendFd:  sendFd,
+		recvFd:  recvFd,
+		nicID:   nicID,
+		tracker: newConnTracker(),
 	}
 
 	go ep.readLoop()
+	go ep.tracker.evictLoop()
 	return ep, nil
 }
 
@@ -98,7 +97,7 @@ func (e *RawSocketEndpoint) readLoop() {
 		if protocol == 6 && dstIP.String() == localIP {
 			dstPort := uint16(buf[22])<<8 | uint16(buf[23])
 
-			if _, active := e.activePorts.Load(dstPort); !active {
+			if !e.tracker.isActive(dstPort) {
 				continue
 			}
 
@@ -106,10 +105,9 @@ func (e *RawSocketEndpoint) readLoop() {
 				ackNum := uint32(buf[28])<<24 | uint32(buf[29])<<16 | uint32(buf[30])<<8 | uint32(buf[31])
 				synSeq := ackNum - 1
 
-				if _, ok := e.outgoingSYNs.Load(synSeq); !ok {
+				if !e.tracker.consumeSYNACK(synSeq) {
 					continue
 				}
-				e.outgoingSYNs.Delete(synSeq)
 			}
 
 			pktCopy := make([]byte, n)
@@ -176,13 +174,11 @@ func (e *RawSocketEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpi
 
 		if tcpHeader[13]&0x02 != 0 {
 			seqNum := uint32(tcpHeader[4])<<24 | uint32(tcpHeader[5])<<16 | uint32(tcpHeader[6])<<8 | uint32(tcpHeader[7])
-			e.outgoingSYNs.Store(seqNum, true)
-			e.activePorts.Store(srcPort, true)
+			e.tracker.recordSYN(seqNum, srcPort)
 		}
 
 		if tcpHeader[13]&0x01 != 0 || tcpHeader[13]&0x04 != 0 {
-			dstPort := uint16(tcpHeader[2])<<8 | uint16(tcpHeader[3])
-			e.activePorts.Delete(dstPort)
+			e.tracker.closePort(srcPort)
 		}
 
 		var dst [4]byte

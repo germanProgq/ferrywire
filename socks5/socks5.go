@@ -1,12 +1,28 @@
 package socks5
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"sync"
 
 	"github.com/germanProgq/ferrywire/utils"
+)
+
+const (
+	socksVersion = 0x05
+	cmdConnect   = 0x01
+	atypIPv4     = 0x01
+	atypDomain   = 0x03
+	methodNoAuth = 0x00
+)
+
+var (
+	errUnsupportedVersion = errors.New("unsupported socks version")
+	errUnsupportedCommand = errors.New("unsupported socks command")
+	errUnsupportedAddress = errors.New("unsupported address type")
+	errNoMethods          = errors.New("no authentication methods offered")
 )
 
 type Dialer interface {
@@ -25,7 +41,7 @@ func NewSOCKS5Server(addr string, dialer Dialer) *SOCKS5Server {
 func (s *SOCKS5Server) Start() error {
 	listener, err := net.Listen("tcp", s.listenAddr)
 	if err != nil {
-		return err
+		return fmt.Errorf("socks5 listen on %s: %w", s.listenAddr, err)
 	}
 	defer listener.Close()
 
@@ -44,31 +60,9 @@ func (s *SOCKS5Server) Start() error {
 func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	defer clientConn.Close()
 
-	buf := make([]byte, 256)
-	n, err := clientConn.Read(buf)
-	if err != nil || n < 2 || buf[0] != 0x05 {
-		return
-	}
-
-	clientConn.Write([]byte{0x05, 0x00})
-
-	n, err = clientConn.Read(buf)
-	if err != nil || n < 10 || buf[1] != 0x01 {
-		return
-	}
-
-	var targetAddr string
-	switch buf[3] {
-	case 0x01:
-		targetAddr = fmt.Sprintf("%d.%d.%d.%d:%d",
-			buf[4], buf[5], buf[6], buf[7],
-			uint16(buf[8])<<8|uint16(buf[9]))
-	case 0x03:
-		domainLen := int(buf[4])
-		targetAddr = fmt.Sprintf("%s:%d",
-			string(buf[5:5+domainLen]),
-			uint16(buf[5+domainLen])<<8|uint16(buf[6+domainLen]))
-	default:
+	targetAddr, err := negotiate(clientConn)
+	if err != nil {
+		utils.Debugf("[SOCKS5] Handshake failed: %v", err)
 		return
 	}
 
@@ -77,26 +71,96 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	targetConn, err := s.dialer.DialTCP(targetAddr)
 	if err != nil {
 		utils.Debugf("[SOCKS5] Dial failed: %v", err)
-		clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+		clientConn.Write([]byte{socksVersion, 0x04, 0x00, atypIPv4, 0, 0, 0, 0, 0, 0})
 		return
 	}
 	defer targetConn.Close()
 
-	clientConn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	clientConn.Write([]byte{socksVersion, 0x00, 0x00, atypIPv4, 0, 0, 0, 0, 0, 0})
 
+	relay(clientConn, targetConn)
+}
+
+func negotiate(conn io.ReadWriter) (string, error) {
+	if err := readGreeting(conn); err != nil {
+		return "", err
+	}
+	if _, err := conn.Write([]byte{socksVersion, methodNoAuth}); err != nil {
+		return "", err
+	}
+	return parseRequest(conn)
+}
+
+func readGreeting(r io.Reader) error {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return err
+	}
+	if header[0] != socksVersion {
+		return errUnsupportedVersion
+	}
+	methodCount := int(header[1])
+	if methodCount == 0 {
+		return errNoMethods
+	}
+	methods := make([]byte, methodCount)
+	_, err := io.ReadFull(r, methods)
+	return err
+}
+
+func parseRequest(r io.Reader) (string, error) {
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return "", err
+	}
+	if header[0] != socksVersion {
+		return "", errUnsupportedVersion
+	}
+	if header[1] != cmdConnect {
+		return "", errUnsupportedCommand
+	}
+
+	switch header[3] {
+	case atypIPv4:
+		buf := make([]byte, 4+2)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%d.%d.%d.%d:%d",
+			buf[0], buf[1], buf[2], buf[3],
+			uint16(buf[4])<<8|uint16(buf[5])), nil
+	case atypDomain:
+		lengthByte := make([]byte, 1)
+		if _, err := io.ReadFull(r, lengthByte); err != nil {
+			return "", err
+		}
+		domainLen := int(lengthByte[0])
+		buf := make([]byte, domainLen+2)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s:%d",
+			string(buf[:domainLen]),
+			uint16(buf[domainLen])<<8|uint16(buf[domainLen+1])), nil
+	default:
+		return "", errUnsupportedAddress
+	}
+}
+
+func relay(a, b net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
-		defer targetConn.Close()
-		io.Copy(targetConn, clientConn)
+		defer b.Close()
+		io.Copy(b, a)
 	}()
 
 	go func() {
 		defer wg.Done()
-		defer clientConn.Close()
-		io.Copy(clientConn, targetConn)
+		defer a.Close()
+		io.Copy(a, b)
 	}()
 
 	wg.Wait()

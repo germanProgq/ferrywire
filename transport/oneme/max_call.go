@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -82,10 +81,9 @@ func (h *CallHandler) signalReconnect() {
 		case h.reconnectCh <- struct{}{}:
 		default:
 		}
-	} else {
-		logError("[%s] Receiver connection died, exiting", h.tag)
-		os.Exit(1)
+		return
 	}
+	logError("[%s] Receiver connection died", h.tag)
 }
 
 func (h *CallHandler) sendAcceptCall() {
@@ -106,8 +104,16 @@ func (h *CallHandler) sendAcceptCall() {
 
 func (h *CallHandler) createPeerConnection(convParams map[string]interface{}) {
 	logInfo("[%s] Creating PeerConnection...", h.tag)
-	turn := convParams["turn"].(map[string]interface{})
-	stun := convParams["stun"].(map[string]interface{})
+	turn, ok := convParams["turn"].(map[string]interface{})
+	if !ok {
+		logError("[%s] conversationParams missing turn", h.tag)
+		return
+	}
+	stun, ok := convParams["stun"].(map[string]interface{})
+	if !ok {
+		logError("[%s] conversationParams missing stun", h.tag)
+		return
+	}
 	var stunURLs, turnURLs []string
 	if urls, ok := stun["urls"].([]interface{}); ok && len(urls) > 0 {
 		stunURLs = []string{urls[0].(string)}
@@ -323,6 +329,42 @@ func (h *CallHandler) handleSDP(sdpType string, sdpStr string) {
 	}
 }
 
+func localParticipantID(data map[string]interface{}, wantCreator bool) (int64, bool) {
+	conv, ok := data["conversation"].(map[string]interface{})
+	if !ok {
+		return 0, false
+	}
+	parts, ok := conv["participants"].([]interface{})
+	if !ok {
+		return 0, false
+	}
+
+	var id int64
+	found := false
+	for _, p := range parts {
+		part, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		isCreator := false
+		if roles, ok := part["roles"].([]interface{}); ok {
+			for _, r := range roles {
+				if s, ok := r.(string); ok && s == "CREATOR" {
+					isCreator = true
+				}
+			}
+		}
+		if isCreator != wantCreator {
+			continue
+		}
+		if fid, ok := part["id"].(float64); ok {
+			id = int64(fid)
+			found = true
+		}
+	}
+	return id, found
+}
+
 func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 	h := &CallHandler{tag: "CALLER", role: "caller"}
 	h.seq = 1
@@ -332,23 +374,9 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 		json.Unmarshal([]byte(text), &data)
 
 		if h.localID == 0 {
-			if conv, ok := data["conversation"].(map[string]interface{}); ok {
-				if parts, ok := conv["participants"].([]interface{}); ok {
-					for _, p := range parts {
-						part := p.(map[string]interface{})
-						roles, _ := part["roles"].([]interface{})
-						isCreator := false
-						for _, r := range roles {
-							if r.(string) == "CREATOR" {
-								isCreator = true
-							}
-						}
-						if !isCreator {
-							h.localID = int64(part["id"].(float64))
-							logInfo("[%s] Local ID: %d", h.tag, h.localID)
-						}
-					}
-				}
+			if id, ok := localParticipantID(data, false); ok {
+				h.localID = id
+				logInfo("[%s] Local ID: %d", h.tag, h.localID)
 			}
 		}
 
@@ -381,7 +409,8 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 				if useICEInjection {
 					return
 				}
-				h.handleSDP(sdpType, sdp["sdp"].(string))
+				sdpStr, _ := sdp["sdp"].(string)
+				h.handleSDP(sdpType, sdpStr)
 			}
 			return
 		}
@@ -413,12 +442,17 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 			h.dc = nil
 			h.mu.Unlock()
 
-			resp, _ := client.invoke(78, map[string]interface{}{
+			resp, err := client.invoke(78, map[string]interface{}{
 				"conversationId": genUUID(),
 				"calleeIds":      []int64{calleeID},
 				"internalParams": fmt.Sprintf(`{"deviceId":"%s","sdkVersion":"2.8.9","clientAppKey":"CNHIJPLGDIHBABABA","platform":"WEB","protocolVersion":5,"domainId":"","capabilities":"2A03F"}`, client.deviceID),
 				"isVideo":        false,
 			})
+			if err != nil || resp == nil {
+				logError("[CALLER] start-call invoke failed: %v", err)
+				time.Sleep(1 * time.Second)
+				continue
+			}
 			var payload map[string]interface{}
 			json.Unmarshal(resp.Payload, &payload)
 			paramsStr, _ := payload["internalCallerParams"].(string)
@@ -454,23 +488,9 @@ func startIncomingListener(client *MaxClient) *CallHandler {
 		json.Unmarshal([]byte(text), &data)
 
 		if h.localID == 0 {
-			if conv, ok := data["conversation"].(map[string]interface{}); ok {
-				if parts, ok := conv["participants"].([]interface{}); ok {
-					for _, p := range parts {
-						part := p.(map[string]interface{})
-						roles, _ := part["roles"].([]interface{})
-						isCreator := false
-						for _, r := range roles {
-							if r.(string) == "CREATOR" {
-								isCreator = true
-							}
-						}
-						if isCreator {
-							h.localID = int64(part["id"].(float64))
-							logInfo("[%s] Local ID: %d", h.tag, h.localID)
-						}
-					}
-				}
+			if id, ok := localParticipantID(data, true); ok {
+				h.localID = id
+				logInfo("[%s] Local ID: %d", h.tag, h.localID)
 			}
 		}
 
@@ -483,7 +503,9 @@ func startIncomingListener(client *MaxClient) *CallHandler {
 			return
 		}
 		if sdp, ok := d["sdp"].(map[string]interface{}); ok {
-			h.handleSDP(sdp["type"].(string), sdp["sdp"].(string))
+			sdpType, _ := sdp["type"].(string)
+			sdpStr, _ := sdp["sdp"].(string)
+			h.handleSDP(sdpType, sdpStr)
 			return
 		}
 		if c, ok := d["candidate"].(map[string]interface{}); ok {
@@ -519,6 +541,9 @@ func startIncomingListener(client *MaxClient) *CallHandler {
 				return
 			}
 			h.mu.Lock()
+			if h.conn != nil {
+				h.conn.Close()
+			}
 			h.conn = conn
 			h.mu.Unlock()
 			go h.readLoop()
