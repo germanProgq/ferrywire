@@ -50,6 +50,8 @@ type Client struct {
 	deviceID      string
 	loggedIn      bool
 	keepaliveStop chan struct{}
+	closeOnce     sync.Once
+	done          chan struct{}
 	onEvent       func(Packet)
 }
 
@@ -60,7 +62,6 @@ type CallHandler struct {
 	dc                *webrtc.DataChannel
 	conn              *websocket.Conn
 	localID           int64
-	remoteID          int64
 	seq               int64
 	callAccepted      bool
 	acceptSent        bool
@@ -69,5 +70,6 @@ type CallHandler struct {
 	dcInbound         func([]byte)
 	msgHandler        func(string)
 	reconnectCh       chan struct{}
+	fatal             func(error)
 	mu                sync.Mutex
 }

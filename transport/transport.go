@@ -14,8 +14,10 @@ type Config struct {
 
 type Transport interface {
 	Start() error
+	Stop()
 	Send(data []byte) error
 	Receive(callback func([]byte))
+	Fatal() <-chan error
 }
 
 func DefaultConfig() Config {
@@ -33,15 +35,34 @@ type Base struct {
 
 	receiveCallback func([]byte)
 	mu              sync.RWMutex
+	fatal           chan error
 }
 
 func NewBase(config Config) *Base {
-	return &Base{config: config}
+	return &Base{config: config, fatal: make(chan error, 1)}
 }
 
 func (b *Base) Start() error {
 	b.running.Store(1)
 	return nil
+}
+
+func (b *Base) Stop() {
+	b.running.Store(0)
+}
+
+func (b *Base) Fatal() <-chan error {
+	return b.fatal
+}
+
+func (b *Base) ReportFatal(err error) {
+	if !b.IsRunning() {
+		return
+	}
+	select {
+	case b.fatal <- err:
+	default:
+	}
 }
 
 func (b *Base) IsRunning() bool {

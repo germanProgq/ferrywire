@@ -93,6 +93,8 @@ type loopback struct {
 }
 
 func (l *loopback) Start() error            { return nil }
+func (l *loopback) Stop()                   {}
+func (l *loopback) Fatal() <-chan error     { return nil }
 func (l *loopback) Receive(cb func([]byte)) { l.cb = cb }
 func (l *loopback) Send(data []byte) error {
 	if l.peer.cb != nil {

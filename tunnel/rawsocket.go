@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +44,8 @@ type RawSocketEndpoint struct {
 	packetOut       atomic.Uint64
 	tracker         *connTracker
 	sendToTransport func([]byte)
+	stopEviction    context.CancelFunc
+	closeOnce       sync.Once
 }
 
 func NewRawSocketEndpoint(nicID tcpip.NICID) (*RawSocketEndpoint, error) {
@@ -50,13 +53,15 @@ func NewRawSocketEndpoint(nicID tcpip.NICID) (*RawSocketEndpoint, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	ep := &RawSocketEndpoint{
-		sock:    sock,
-		nicID:   nicID,
-		tracker: newConnTracker(),
+		sock:         sock,
+		nicID:        nicID,
+		tracker:      newConnTracker(),
+		stopEviction: cancel,
 	}
 	go ep.readLoop()
-	go ep.tracker.evictLoop(context.Background())
+	go ep.tracker.evictLoop(ctx)
 	return ep, nil
 }
 
@@ -199,8 +204,13 @@ func (e *RawSocketEndpoint) IsAttached() bool                          { return 
 func (e *RawSocketEndpoint) Wait()                                     {}
 func (e *RawSocketEndpoint) ARPHardwareType() header.ARPHardwareType   { return header.ARPHardwareNone }
 func (e *RawSocketEndpoint) AddHeader(*stack.PacketBuffer)             {}
-func (e *RawSocketEndpoint) Close()                                    { e.sock.close() }
-func (e *RawSocketEndpoint) SetMTU(uint32)                             {}
-func (e *RawSocketEndpoint) SetLinkAddress(tcpip.LinkAddress)          {}
-func (e *RawSocketEndpoint) ParseHeader(*stack.PacketBuffer) bool      { return true }
-func (e *RawSocketEndpoint) SetOnCloseAction(func())                   {}
+func (e *RawSocketEndpoint) Close() {
+	e.closeOnce.Do(func() {
+		e.stopEviction()
+		e.sock.close()
+	})
+}
+func (e *RawSocketEndpoint) SetMTU(uint32)                        {}
+func (e *RawSocketEndpoint) SetLinkAddress(tcpip.LinkAddress)     {}
+func (e *RawSocketEndpoint) ParseHeader(*stack.PacketBuffer) bool { return true }
+func (e *RawSocketEndpoint) SetOnCloseAction(func())              {}

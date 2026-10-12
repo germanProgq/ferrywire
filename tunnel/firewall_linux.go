@@ -1,25 +1,36 @@
 package tunnel
 
 import (
-	"fmt"
 	"log/slog"
 	"os/exec"
 )
 
-func ensureRSTDropRule() {
-	args := []string{"OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-j", "DROP"}
+var rstDropRule = []string{"OUTPUT", "-p", "tcp", "--tcp-flags", "RST", "RST", "-j", "DROP"}
 
+func deleteRSTDropRule() ([]byte, error) {
+	return exec.Command("iptables", append([]string{"-D"}, rstDropRule...)...).CombinedOutput()
+}
+
+func ensureRSTDropRule() bool {
 	for {
-		if err := exec.Command("iptables", append([]string{"-D"}, args...)...).Run(); err != nil {
+		if _, err := deleteRSTDropRule(); err != nil {
 			break
 		}
 	}
 
-	insertArgs := append([]string{"-I", "OUTPUT", "1"}, args[1:]...)
+	insertArgs := append([]string{"-I", "OUTPUT", "1"}, rstDropRule[1:]...)
 	if out, err := exec.Command("iptables", insertArgs...).CombinedOutput(); err != nil {
-		slog.Debug(fmt.Sprintf("[TUNNEL] Failed to auto-configure iptables RST-drop rule: %v (%s)", err, string(out)))
-		slog.Debug("[TUNNEL] Run manually: sudo iptables -I OUTPUT 1 -p tcp --tcp-flags RST RST -j DROP")
-	} else {
-		slog.Debug("[TUNNEL] Auto-configured iptables RST-drop rule at top of OUTPUT chain")
+		slog.Warn("failed to install iptables RST-drop rule; run: sudo iptables -I OUTPUT 1 -p tcp --tcp-flags RST RST -j DROP", "err", err, "output", string(out))
+		return false
 	}
+	slog.Debug("installed iptables RST-drop rule at top of OUTPUT chain")
+	return true
+}
+
+func removeRSTDropRule() {
+	if out, err := deleteRSTDropRule(); err != nil {
+		slog.Warn("failed to remove iptables RST-drop rule", "err", err, "output", string(out))
+		return
+	}
+	slog.Debug("removed iptables RST-drop rule")
 }

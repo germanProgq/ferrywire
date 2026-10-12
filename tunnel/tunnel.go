@@ -29,6 +29,7 @@ type TCPTunnel struct {
 	transport   transport.Transport
 	isExitNode  bool
 	rawEP       *RawSocketEndpoint
+	ownsRSTRule bool
 	startTime   time.Time
 	packetCount atomic.Uint64
 }
@@ -86,7 +87,7 @@ func (t *TCPTunnel) setupExitNode(tunnelNIC tcpip.NICID) {
 	localIP := getLocalIP()
 	slog.Debug(fmt.Sprintf("[TUNNEL] EXIT NODE - Local IP: %s", localIP))
 
-	ensureRSTDropRule()
+	t.ownsRSTRule = ensureRSTDropRule()
 
 	rawEP, err := NewRawSocketEndpoint(internetNICID)
 	if err != nil {
@@ -146,6 +147,16 @@ func (t *TCPTunnel) setupClient(tunnelNIC tcpip.NICID) {
 		Destination: header.IPv4EmptySubnet,
 		NIC:         tunnelNIC,
 	})
+}
+
+func (t *TCPTunnel) Close() {
+	if t.rawEP != nil {
+		t.rawEP.Close()
+	}
+	if t.ownsRSTRule {
+		removeRSTDropRule()
+		t.ownsRSTRule = false
+	}
 }
 
 func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {

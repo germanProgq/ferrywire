@@ -1,7 +1,10 @@
 package oneme
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
+
 	"github.com/germanProgq/ferrywire/transport"
 )
 
@@ -11,12 +14,8 @@ type Transport struct {
 	uid   int64
 	exit  bool
 
-	oneMeClient Client
-	ch          *CallHandler
-}
-
-func (t *Transport) Receive(callback func([]byte)) {
-	t.b.Receive(callback)
+	client *Client
+	ch     *CallHandler
 }
 
 func NewTransport(isExit bool, maxToken string, maxUid int64, config transport.Config) *Transport {
@@ -28,26 +27,51 @@ func NewTransport(isExit bool, maxToken string, maxUid int64, config transport.C
 	}
 }
 
+func (t *Transport) Receive(callback func([]byte)) {
+	t.b.Receive(callback)
+}
+
+func (t *Transport) Fatal() <-chan error {
+	return t.b.Fatal()
+}
+
 func (t *Transport) Start() error {
-	slog.Debug("creating max client ...")
-	t.oneMeClient = *NewClient()
-	t.oneMeClient.Connect()
-	t.oneMeClient.LoginByToken(t.token)
+	if err := t.b.Start(); err != nil {
+		return err
+	}
+
+	t.client = NewClient()
+	if err := t.client.Connect(); err != nil {
+		return fmt.Errorf("connect to MAX: %w", err)
+	}
+	if err := t.client.LoginByToken(t.token); err != nil {
+		t.client.Close()
+		return fmt.Errorf("login to MAX: %w", err)
+	}
+	go t.watchClient()
 
 	if t.exit {
-		slog.Debug("configured ch for exit node")
-		t.ch = startIncomingListener(&t.oneMeClient)
+		t.ch = startIncomingListener(t.client, t.b.CallReceive, t.b.ReportFatal)
 	} else {
-		slog.Debug("configured ch for client mode")
-		t.ch = startOutgoingCall(&t.oneMeClient, t.uid)
+		t.ch = startOutgoingCall(t.client, t.uid, t.b.CallReceive, t.b.ReportFatal)
 	}
+	slog.Debug("MAX transport started", "exit", t.exit)
+	return nil
+}
 
-	slog.Debug("configured dc inbound")
-	t.ch.dcInbound = func(data []byte) {
-		t.b.CallReceive(data)
+func (t *Transport) watchClient() {
+	<-t.client.Done()
+	t.b.ReportFatal(errors.New("MAX websocket connection closed"))
+}
+
+func (t *Transport) Stop() {
+	t.b.Stop()
+	if t.ch != nil {
+		t.ch.close()
 	}
-
-	return t.b.Start()
+	if t.client != nil {
+		t.client.Close()
+	}
 }
 
 func (t *Transport) Send(data []byte) error {

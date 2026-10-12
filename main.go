@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -19,6 +20,10 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	exitNode := flag.Bool("exit-node", false, "Run as exit node (needs root)")
 	client := flag.Bool("client", false, "Run as client")
 	debug := flag.Bool("debug", false, "Enable verbose debug logging")
@@ -34,7 +39,7 @@ func main() {
 	if *exitNode == *client {
 		slog.Error("exactly one of --exit-node or --client must be set")
 		flag.Usage()
-		os.Exit(1)
+		return 1
 	}
 
 	slog.Info("ferrywire starting", "mode", modeName(*exitNode), "transport", *transportType)
@@ -42,31 +47,28 @@ func main() {
 	trans, err := buildTransport(*transportType, *exitNode, *docURL, *maxToken, *maxUID)
 	if err != nil {
 		slog.Error("failed to build transport", "err", err)
-		os.Exit(1)
+		return 1
 	}
 
 	if err := trans.Start(); err != nil {
 		slog.Error("failed to start transport", "err", err)
-		os.Exit(1)
+		return 1
 	}
+	defer trans.Stop()
 
 	tun := tunnel.NewTCPTunnel(trans, *exitNode)
+	defer tun.Close()
 
+	serverErr := make(chan error, 1)
 	if *exitNode {
 		slog.Info("running as exit node (needs root for raw socket)")
-		waitForShutdown()
-		return
+	} else {
+		slog.Info("running as client", "socks5", *socksAddr)
+		server := socks5.NewServer(*socksAddr, tun)
+		go func() { serverErr <- server.Start() }()
 	}
 
-	slog.Info("running as client", "socks5", *socksAddr)
-	server := socks5.NewServer(*socksAddr, tun)
-	go func() {
-		if err := server.Start(); err != nil {
-			slog.Error("socks5 server stopped", "err", err)
-			os.Exit(1)
-		}
-	}()
-	waitForShutdown()
+	return waitForShutdown(trans.Fatal(), serverErr)
 }
 
 func buildTransport(kind string, exitNode bool, docURL, maxToken, maxUID string) (transport.Transport, error) {
@@ -100,9 +102,19 @@ func setupLogging(debug bool) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
-func waitForShutdown() {
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	received := <-sig
-	slog.Info("shutting down", "signal", received.String())
+func waitForShutdown(transportFatal <-chan error, serverErr <-chan error) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case <-ctx.Done():
+		slog.Info("shutting down")
+		return 0
+	case err := <-transportFatal:
+		slog.Error("transport failed", "err", err)
+		return 1
+	case err := <-serverErr:
+		slog.Error("socks5 server stopped", "err", err)
+		return 1
+	}
 }

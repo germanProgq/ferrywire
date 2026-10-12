@@ -28,6 +28,7 @@ func NewClient() *Client {
 	return &Client{
 		deviceID:      genUUID(),
 		keepaliveStop: make(chan struct{}),
+		done:          make(chan struct{}),
 	}
 }
 
@@ -49,7 +50,21 @@ func (c *Client) Connect() error {
 
 func (c *Client) SetEventCallback(cb func(Packet)) { c.onEvent = cb }
 
+func (c *Client) Done() <-chan struct{} { return c.done }
+
+func (c *Client) Close() {
+	c.closeOnce.Do(func() {
+		close(c.keepaliveStop)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.conn != nil {
+			c.conn.Close()
+		}
+	})
+}
+
 func (c *Client) readLoop() {
+	defer close(c.done)
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
@@ -89,7 +104,7 @@ func (c *Client) invoke(opcode int, payload map[string]interface{}) (*Packet, er
 }
 
 func (c *Client) LoginByToken(token string) error {
-	c.invoke(opcodeSessionInit, map[string]interface{}{
+	_, err := c.invoke(opcodeSessionInit, map[string]interface{}{
 		"userAgent": map[string]interface{}{
 			"deviceType": "WEB", "locale": "ru_RU", "osVersion": "macOS",
 			"deviceName": "vkmax Go", "appVersion": "25.9.15",
@@ -97,6 +112,9 @@ func (c *Client) LoginByToken(token string) error {
 		},
 		"deviceId": c.deviceID,
 	})
+	if err != nil {
+		return fmt.Errorf("session init: %w", err)
+	}
 	resp, err := c.invoke(opcodeLogin, map[string]interface{}{
 		"interactive": true, "token": token, "chatsSync": 0,
 		"contactsSync": 0, "presenceSync": 0, "draftsSync": 0, "chatsCount": 40,
@@ -105,7 +123,9 @@ func (c *Client) LoginByToken(token string) error {
 		return err
 	}
 	var payload map[string]interface{}
-	json.Unmarshal(resp.Payload, &payload)
+	if err := json.Unmarshal(resp.Payload, &payload); err != nil {
+		return fmt.Errorf("login response: %w", err)
+	}
 	if _, ok := payload["error"]; ok {
 		return fmt.Errorf("login failed: %v", payload["error"])
 	}
@@ -117,11 +137,11 @@ func (c *Client) LoginByToken(token string) error {
 func (c *Client) keepalive() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
 		select {
 		case <-c.keepaliveStop:
 			return
-		default:
+		case <-ticker.C:
 			if c.loggedIn {
 				c.invoke(opcodeKeepAlive, map[string]interface{}{"interactive": false})
 			}

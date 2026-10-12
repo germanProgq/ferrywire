@@ -2,4 +2,6 @@
 
 package tunnel
 
-func ensureRSTDropRule() {}
+func ensureRSTDropRule() bool { return false }
+
+func removeRSTDropRule() {}

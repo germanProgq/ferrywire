@@ -26,13 +26,16 @@ func (h *CallHandler) Send(data []byte) {
 	}
 }
 
-func (h *CallHandler) readLoop() {
+func (h *CallHandler) readLoop(conn *websocket.Conn) {
 	slog.Debug(fmt.Sprintf("[%s] Signaling connected", h.tag))
 	for {
-		_, message, err := h.conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
+			if !h.isCurrentConn(conn) {
+				return
+			}
 			slog.Error(fmt.Sprintf("[%s] Signaling disconnected: %v", h.tag, err))
-			h.signalReconnect()
+			h.signalReconnect(err)
 			return
 		}
 		text := string(message)
@@ -66,14 +69,17 @@ func (h *CallHandler) readLoop() {
 			continue
 		}
 
-		if pid, ok := data["participantId"].(float64); ok {
-			h.remoteID = int64(pid)
-		}
 		go h.msgHandler(text)
 	}
 }
 
-func (h *CallHandler) signalReconnect() {
+func (h *CallHandler) isCurrentConn(conn *websocket.Conn) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.conn == conn
+}
+
+func (h *CallHandler) signalReconnect(cause error) {
 	if h.role == "caller" {
 		select {
 		case h.reconnectCh <- struct{}{}:
@@ -81,7 +87,18 @@ func (h *CallHandler) signalReconnect() {
 		}
 		return
 	}
-	slog.Error(fmt.Sprintf("[%s] Receiver connection died", h.tag))
+	h.fatal(fmt.Errorf("receiver signaling connection died: %w", cause))
+}
+
+func (h *CallHandler) close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.conn != nil {
+		h.conn.Close()
+	}
+	if h.pc != nil {
+		h.pc.Close()
+	}
 }
 
 func (h *CallHandler) sendAcceptCall() {
@@ -362,8 +379,8 @@ func localParticipantID(data map[string]interface{}, wantCreator bool) (int64, b
 	return id, found
 }
 
-func startOutgoingCall(client *Client, calleeID int64) *CallHandler {
-	h := &CallHandler{tag: "CALLER", role: "caller"}
+func startOutgoingCall(client *Client, calleeID int64, inbound func([]byte), fatal func(error)) *CallHandler {
+	h := &CallHandler{tag: "CALLER", role: "caller", dcInbound: inbound, fatal: fatal}
 	h.seq = 1
 	h.reconnectCh = make(chan struct{}, 1)
 	h.msgHandler = func(text string) {
@@ -446,9 +463,8 @@ func startOutgoingCall(client *Client, calleeID int64) *CallHandler {
 				"isVideo":        false,
 			})
 			if err != nil || resp == nil {
-				slog.Error(fmt.Sprintf("[CALLER] start-call invoke failed: %v", err))
-				time.Sleep(1 * time.Second)
-				continue
+				h.fatal(fmt.Errorf("start-call invoke failed: %w", err))
+				return
 			}
 			var payload map[string]interface{}
 			json.Unmarshal(resp.Payload, &payload)
@@ -466,7 +482,7 @@ func startOutgoingCall(client *Client, calleeID int64) *CallHandler {
 			h.mu.Lock()
 			h.conn = conn
 			h.mu.Unlock()
-			go h.readLoop()
+			go h.readLoop(conn)
 
 			<-h.reconnectCh
 			slog.Debug("[CALLER] Reconnecting in 1s...")
@@ -477,8 +493,8 @@ func startOutgoingCall(client *Client, calleeID int64) *CallHandler {
 	return h
 }
 
-func startIncomingListener(client *Client) *CallHandler {
-	h := &CallHandler{tag: "RECEIVER", role: "receiver"}
+func startIncomingListener(client *Client, inbound func([]byte), fatal func(error)) *CallHandler {
+	h := &CallHandler{tag: "RECEIVER", role: "receiver", dcInbound: inbound, fatal: fatal}
 	h.seq = 1
 	h.msgHandler = func(text string) {
 		var data map[string]interface{}
@@ -543,7 +559,7 @@ func startIncomingListener(client *Client) *CallHandler {
 			}
 			h.conn = conn
 			h.mu.Unlock()
-			go h.readLoop()
+			go h.readLoop(conn)
 			go func() {
 				time.Sleep(1 * time.Second)
 				if !h.acceptSent {

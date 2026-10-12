@@ -1,7 +1,7 @@
 package tunnel
 
 import (
-	"fmt"
+	"context"
 	"log/slog"
 	"sync/atomic"
 
@@ -25,7 +25,9 @@ func NewTunnelLinkEndpoint() *TunnelLinkEndpoint {
 
 func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
 	e.packetIn.Add(1)
-	slog.Debug(fmt.Sprintf("<- %d bytes - %s\n", len(data), parsePacketInfo(data)))
+	if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		slog.Debug("inbound packet", "bytes", len(data), "info", parsePacketInfo(data))
+	}
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData(append([]byte{}, data...)),
 	})

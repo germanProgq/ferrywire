@@ -135,6 +135,17 @@ func (t *Transport) Start() error {
 	return nil
 }
 
+func (t *Transport) Stop() {
+	t.Base.Stop()
+	t.SetConnected(false)
+	t.sessionMu.RLock()
+	session := t.session
+	t.sessionMu.RUnlock()
+	if session != nil && session.Conn != nil {
+		session.Conn.Close()
+	}
+}
+
 func (t *Transport) Send(data []byte) error {
 	if !t.IsConnected() {
 		return fmt.Errorf("transport not connected")
@@ -355,7 +366,11 @@ func (t *Transport) extractBase64String(response string) string {
 }
 
 func (t *Transport) scheduleReconnect(attempt int) {
-	if !t.IsRunning() || attempt >= t.GetConfig().MaxReconnectAttempts {
+	if !t.IsRunning() {
+		return
+	}
+	if attempt >= t.GetConfig().MaxReconnectAttempts {
+		t.ReportFatal(fmt.Errorf("yandex docs: gave up after %d reconnect attempts", attempt))
 		return
 	}
 
