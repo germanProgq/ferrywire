@@ -19,10 +19,6 @@ func (t *OneMeTransport) Receive(callback func([]byte)) {
 	t.b.Receive(callback)
 }
 
-func (t *OneMeTransport) Stats() transport.TransportStats {
-	return t.b.Stats()
-}
-
 func NewOneMeTransport(isExit bool, maxToken string, maxUid int64, config transport.TransportConfig) *OneMeTransport {
 	return &OneMeTransport{
 		b:     transport.NewBaseTransport(config),
@@ -52,14 +48,6 @@ func (t *OneMeTransport) Start() error {
 	}
 
 	return t.b.Start()
-}
-
-func (t *OneMeTransport) Stop() error {
-	return t.b.Stop()
-}
-
-func (t *OneMeTransport) IsConnected() bool {
-	return true
 }
 
 func (t *OneMeTransport) Send(data []byte) error {

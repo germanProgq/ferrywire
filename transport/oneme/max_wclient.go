@@ -15,6 +15,14 @@ const (
 	USER_AGENT  = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 )
 
+const (
+	opcodeKeepAlive    = 1
+	opcodeSessionInit  = 6
+	opcodeLogin        = 19
+	opcodeStartCall    = 78
+	opcodeIncomingCall = 137
+)
+
 func NewMaxClient() *MaxClient {
 	return &MaxClient{
 		deviceID:      genUUID(),
@@ -80,7 +88,7 @@ func (c *MaxClient) invoke(opcode int, payload map[string]interface{}) (*MaxPack
 }
 
 func (c *MaxClient) LoginByToken(token string) error {
-	c.invoke(6, map[string]interface{}{
+	c.invoke(opcodeSessionInit, map[string]interface{}{
 		"userAgent": map[string]interface{}{
 			"deviceType": "WEB", "locale": "ru_RU", "osVersion": "macOS",
 			"deviceName": "vkmax Go", "appVersion": "25.9.15",
@@ -88,7 +96,7 @@ func (c *MaxClient) LoginByToken(token string) error {
 		},
 		"deviceId": c.deviceID,
 	})
-	resp, err := c.invoke(19, map[string]interface{}{
+	resp, err := c.invoke(opcodeLogin, map[string]interface{}{
 		"interactive": true, "token": token, "chatsSync": 0,
 		"contactsSync": 0, "presenceSync": 0, "draftsSync": 0, "chatsCount": 40,
 	})
@@ -166,7 +174,7 @@ func (c *MaxClient) keepalive() {
 			return
 		default:
 			if c.loggedIn {
-				c.invoke(1, map[string]interface{}{"interactive": false})
+				c.invoke(opcodeKeepAlive, map[string]interface{}{"interactive": false})
 			}
 		}
 	}

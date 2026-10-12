@@ -18,6 +18,11 @@ import (
 	"github.com/germanProgq/ferrywire/utils"
 )
 
+const (
+	tunnelNICID   = tcpip.NICID(1)
+	internetNICID = tcpip.NICID(2)
+)
+
 type TCPTunnel struct {
 	gvisorStack *stack.Stack
 	tunnelEP    *TunnelLinkEndpoint
@@ -58,7 +63,7 @@ func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
 	}
 	t.tunnelEP = tunnelEP
 
-	tunnelNIC := tcpip.NICID(1)
+	tunnelNIC := tunnelNICID
 	if err := t.gvisorStack.CreateNIC(tunnelNIC, tunnelEP); err != nil {
 		utils.Debugf("[TUNNEL] CreateNIC tunnel error: %v", err)
 	}
@@ -83,7 +88,7 @@ func (t *TCPTunnel) setupExitNode(tunnelNIC tcpip.NICID) {
 
 	ensureRSTDropRule()
 
-	rawEP, err := NewRawSocketEndpoint(tcpip.NICID(2))
+	rawEP, err := NewRawSocketEndpoint(internetNICID)
 	if err != nil {
 		utils.Debugf("[TUNNEL] Raw socket error: %v", err)
 		return
@@ -94,7 +99,7 @@ func (t *TCPTunnel) setupExitNode(tunnelNIC tcpip.NICID) {
 		t.transport.Send(data)
 	})
 
-	internetNIC := tcpip.NICID(2)
+	internetNIC := internetNICID
 	if err := t.gvisorStack.CreateNIC(internetNIC, rawEP); err != nil {
 		utils.Debugf("[TUNNEL] CreateNIC internet error: %v", err)
 		return
@@ -154,9 +159,9 @@ func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {
 		return nil, fmt.Errorf("IPv6 not supported")
 	}
 
-	nic := tcpip.NICID(1)
+	nic := tunnelNICID
 	if t.isExitNode {
-		nic = tcpip.NICID(2)
+		nic = internetNICID
 	}
 
 	conn, err := gonet.DialTCP(t.gvisorStack, tcpip.FullAddress{
@@ -166,13 +171,6 @@ func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {
 	}, ipv4.ProtocolNumber)
 
 	return conn, err
-}
-
-func (t *TCPTunnel) ListenTCP(port uint16) (net.Listener, error) {
-	return gonet.ListenTCP(t.gvisorStack, tcpip.FullAddress{
-		NIC:  1,
-		Port: port,
-	}, ipv4.ProtocolNumber)
 }
 
 func (t *TCPTunnel) printStats() {

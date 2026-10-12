@@ -26,6 +26,11 @@ const (
 	maxBatchCount = 128
 )
 
+var (
+	clientConfigRe = regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*?)</script>`)
+	cursorRe       = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
+)
+
 func encodeBatch(packets [][]byte) []byte {
 	total := 1
 	for _, p := range packets {
@@ -101,8 +106,9 @@ func (s *DocSession) safeWrite(messageType int, data []byte) error {
 type YandexDocsTransport struct {
 	*transport.BaseTransport
 
-	url     string
-	session *DocSession
+	url       string
+	session   *DocSession
+	sessionMu sync.RWMutex
 
 	userCounter atomic.Int32
 	baseUserID  string
@@ -134,9 +140,9 @@ func (t *YandexDocsTransport) Send(data []byte) error {
 		return fmt.Errorf("transport not connected")
 	}
 
-	t.Mu.RLock()
+	t.sessionMu.RLock()
 	session := t.session
-	t.Mu.RUnlock()
+	t.sessionMu.RUnlock()
 
 	if session == nil {
 		return fmt.Errorf("no active session")
@@ -144,7 +150,6 @@ func (t *YandexDocsTransport) Send(data []byte) error {
 
 	select {
 	case session.WriteQueue <- data:
-		t.RecordSend(len(data))
 		return nil
 	default:
 		return fmt.Errorf("write queue full")
@@ -159,9 +164,9 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 	utils.Debugf("[YDOCS] connectToDoc attempt ...")
 
 	go func() {
-		t.Mu.Lock()
+		t.sessionMu.Lock()
 		existingSession := t.session
-		t.Mu.Unlock()
+		t.sessionMu.Unlock()
 
 		var userID string
 		if existingSession != nil {
@@ -208,10 +213,10 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			UserID:     userID,
 		}
 
-		t.Mu.Lock()
+		t.sessionMu.Lock()
 		t.session = session
 		t.SetConnected(true)
-		t.Mu.Unlock()
+		t.sessionMu.Unlock()
 
 		if existingSession == nil {
 			go t.writerLoop()
@@ -245,9 +250,9 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 
 func (t *YandexDocsTransport) writerLoop() {
 	for t.IsRunning() {
-		t.Mu.Lock()
+		t.sessionMu.Lock()
 		session := t.session
-		t.Mu.Unlock()
+		t.sessionMu.Unlock()
 
 		if session == nil || session.Conn == nil {
 			time.Sleep(10 * time.Millisecond)
@@ -275,9 +280,9 @@ func (t *YandexDocsTransport) keepAliveLoop() {
 
 	for t.IsRunning() {
 		<-ticker.C
-		t.Mu.Lock()
+		t.sessionMu.Lock()
 		session := t.session
-		t.Mu.Unlock()
+		t.sessionMu.Unlock()
 
 		if session != nil && session.Conn != nil {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
@@ -319,13 +324,11 @@ func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 		if len(decoded) > 0 && decoded[0] == batchMarker {
 			for _, pkt := range decodeBatch(decoded) {
-				t.RecordReceive(len(pkt))
 				t.CallReceive(pkt)
 			}
 			return
 		}
 
-		t.RecordReceive(len(decoded))
 		t.CallReceive(decoded)
 	}
 }
@@ -344,8 +347,7 @@ func (t *YandexDocsTransport) extractBase64String(response string) string {
 		return response[left : left+right]
 	}
 
-	re := regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
-	matches := re.FindStringSubmatch(response)
+	matches := cursorRe.FindStringSubmatch(response)
 	if len(matches) > 1 {
 		return matches[1]
 	}
@@ -357,7 +359,6 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 		return
 	}
 
-	t.RecordReconnect()
 	t.connectToDoc(attempt + 1)
 }
 
@@ -383,8 +384,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 		cookies = append(cookies, fmt.Sprintf("%s=%s", c.Name, c.Value))
 	}
 
-	re := regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*?)</script>`)
-	matches := re.FindStringSubmatch(html)
+	matches := clientConfigRe.FindStringSubmatch(html)
 	if len(matches) < 2 {
 		return YandexDocsInfo{}, fmt.Errorf("config not found")
 	}

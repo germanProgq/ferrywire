@@ -15,9 +15,6 @@ var (
 	useICEInjection = true
 )
 
-func (h *CallHandler) SetOnConnected(cb func())     { h.onConnected = cb }
-func (h *CallHandler) SetDCInbound(cb func([]byte)) { h.dcInbound = cb }
-
 func (h *CallHandler) Send(data []byte) {
 	if useICEInjection {
 		h.injectICE(data)
@@ -160,9 +157,8 @@ func (h *CallHandler) createPeerConnection(convParams map[string]interface{}) {
 	})
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
 		logInfo("[%s] Connection: %s", h.tag, s.String())
-		if s == webrtc.PeerConnectionStateConnected && h.onConnected != nil {
+		if s == webrtc.PeerConnectionStateConnected {
 			logInfo("[%s] *** CONNECTED! ***", h.tag)
-			h.onConnected()
 		}
 	})
 	pc.OnSignalingStateChange(func(s webrtc.SignalingState) {
@@ -442,7 +438,7 @@ func startOutgoingCall(client *MaxClient, calleeID int64) *CallHandler {
 			h.dc = nil
 			h.mu.Unlock()
 
-			resp, err := client.invoke(78, map[string]interface{}{
+			resp, err := client.invoke(opcodeStartCall, map[string]interface{}{
 				"conversationId": genUUID(),
 				"calleeIds":      []int64{calleeID},
 				"internalParams": fmt.Sprintf(`{"deviceId":"%s","sdkVersion":"2.8.9","clientAppKey":"CNHIJPLGDIHBABABA","platform":"WEB","protocolVersion":5,"domainId":"","capabilities":"2A03F"}`, client.deviceID),
@@ -520,7 +516,7 @@ func startIncomingListener(client *MaxClient) *CallHandler {
 	}
 
 	client.SetEventCallback(func(p MaxPacket) {
-		if p.Opcode == 137 {
+		if p.Opcode == opcodeIncomingCall {
 			logInfo("[RECEIVER] Incoming call!")
 			var payload map[string]interface{}
 			json.Unmarshal(p.Payload, &payload)

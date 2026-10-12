@@ -70,7 +70,6 @@ type CallHandler struct {
 	localID           int64
 	remoteID          int64
 	seq               int64
-	onConnected       func()
 	callAccepted      bool
 	acceptSent        bool
 	hasRemoteDesc     bool
